@@ -15,8 +15,8 @@ mkdir -p "$LAUNCHAGENTS_DIR"
 # Copy plist file to LaunchAgents directory
 cp "$SERVICE_PLIST" "$LAUNCHAGENTS_DIR/"
 
-# Load the service
-launchctl load "$LAUNCHAGENTS_DIR/$SERVICE_PLIST"
+# Load the service using bootstrap (modern macOS)
+launchctl bootstrap gui/$(id -u) "$LAUNCHAGENTS_DIR/$(basename "$SERVICE_PLIST")"
 
 echo "Service installed and started!"
 echo "The sidekick daemon will now start automatically on boot."

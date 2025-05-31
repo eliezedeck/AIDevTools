@@ -7,8 +7,8 @@ LAUNCHAGENTS_DIR="$HOME/Library/LaunchAgents"
 
 echo "Uninstalling sidekick service..."
 
-# Unload the service
-launchctl unload "$LAUNCHAGENTS_DIR/$SERVICE_PLIST" 2>/dev/null
+# Unload the service using bootout (modern macOS)
+launchctl bootout gui/$(id -u)/com.sidekick.daemon 2>/dev/null
 
 # Remove plist file from LaunchAgents directory
 rm -f "$LAUNCHAGENTS_DIR/$SERVICE_PLIST"
