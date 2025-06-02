@@ -7,6 +7,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SERVICE_PLIST="$SCRIPT_DIR/com.sidekick.daemon.plist"
 LAUNCHAGENTS_DIR="$HOME/Library/LaunchAgents"
 
+echo "Building sidekick binary..."
+GOOS=darwin GOARCH=amd64 go build -o "$SCRIPT_DIR/../bin/sidekick" "$SCRIPT_DIR/../main.go"
+
 echo "Installing sidekick service..."
 
 # Create LaunchAgents directory if it doesn't exist
