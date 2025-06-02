@@ -44,7 +44,7 @@ func handleSpeak(c echo.Context) error {
 	}()
 
 	go func() {
-		exec.Command("say", "-v", "Samantha (Enhanced)", req.Text).Run()
+		exec.Command("say", "-v", "Zoe (Premium)", req.Text).Run()
 	}()
 
 	return c.NoContent(http.StatusOK)
