@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -33,14 +32,16 @@ type ProcessTracker struct {
 	Command       string          `json:"command"`
 	Args          []string        `json:"args"`
 	WorkingDir    string          `json:"working_dir"`
+	BufferSize    int64           `json:"buffer_size"`
 	StartTime     time.Time       `json:"start_time"`
 	LastAccessed  time.Time       `json:"last_accessed"`
 	Status        ProcessStatus   `json:"status"`
 	StdoutCursor  int64           `json:"stdout_cursor"`
 	StderrCursor  int64           `json:"stderr_cursor"`
-	StdoutBuffer  *bytes.Buffer   `json:"-"`
-	StderrBuffer  *bytes.Buffer   `json:"-"`
+	StdoutBuffer  *RingBuffer     `json:"-"`
+	StderrBuffer  *RingBuffer     `json:"-"`
 	Process       *exec.Cmd       `json:"-"`
+	StdinWriter   io.WriteCloser  `json:"-"`
 	ExitCode      *int            `json:"exit_code,omitempty"`
 	Mutex         sync.RWMutex    `json:"-"`
 }
@@ -58,6 +59,74 @@ type OutputResponse struct {
 type ProcessRegistry struct {
 	processes map[string]*ProcessTracker
 	mutex     sync.RWMutex
+}
+
+const (
+	DefaultBufferSize = 10 * 1024 * 1024 // 10MB default buffer size
+)
+
+type RingBuffer struct {
+	data        []byte
+	maxSize     int64
+	totalBytes  int64
+	mutex       sync.RWMutex
+}
+
+func NewRingBuffer(maxSize int64) *RingBuffer {
+	return &RingBuffer{
+		data:    make([]byte, 0),
+		maxSize: maxSize,
+	}
+}
+
+func (rb *RingBuffer) Write(data []byte) {
+	rb.mutex.Lock()
+	defer rb.mutex.Unlock()
+	
+	rb.data = append(rb.data, data...)
+	rb.totalBytes += int64(len(data))
+	
+	// Trim from beginning if we exceed max size
+	if int64(len(rb.data)) > rb.maxSize {
+		excess := int64(len(rb.data)) - rb.maxSize
+		rb.data = rb.data[excess:]
+	}
+}
+
+func (rb *RingBuffer) GetContent() string {
+	rb.mutex.RLock()
+	defer rb.mutex.RUnlock()
+	return string(rb.data)
+}
+
+func (rb *RingBuffer) GetContentFromCursor(cursor int64) string {
+	rb.mutex.RLock()
+	defer rb.mutex.RUnlock()
+	
+	// Calculate effective position in current buffer
+	discardedBytes := rb.totalBytes - int64(len(rb.data))
+	effectivePos := cursor - discardedBytes
+	
+	if effectivePos < 0 {
+		effectivePos = 0
+	}
+	if effectivePos >= int64(len(rb.data)) {
+		return ""
+	}
+	
+	return string(rb.data[effectivePos:])
+}
+
+func (rb *RingBuffer) Len() int {
+	rb.mutex.RLock()
+	defer rb.mutex.RUnlock()
+	return len(rb.data)
+}
+
+func (rb *RingBuffer) TotalBytes() int64 {
+	rb.mutex.RLock()
+	defer rb.mutex.RUnlock()
+	return rb.totalBytes
 }
 
 var (
@@ -186,17 +255,27 @@ func handleSpawnProcess(ctx context.Context, request mcp.CallToolRequest) (*mcp.
 		}
 	}
 
+	bufferSize := int64(DefaultBufferSize)
+	if arguments, ok := request.Params.Arguments.(map[string]any); ok {
+		if bs, exists := arguments["buffer_size"]; exists {
+			if bsFloat, ok := bs.(float64); ok {
+				bufferSize = int64(bsFloat)
+			}
+		}
+	}
+
 	processID := uuid.New().String()
 	tracker := &ProcessTracker{
 		ID:           processID,
 		Command:      command,
 		Args:         args,
 		WorkingDir:   workingDir,
+		BufferSize:   bufferSize,
 		StartTime:    time.Now(),
 		LastAccessed: time.Now(),
 		Status:       StatusRunning,
-		StdoutBuffer: &bytes.Buffer{},
-		StderrBuffer: &bytes.Buffer{},
+		StdoutBuffer: NewRingBuffer(bufferSize),
+		StderrBuffer: NewRingBuffer(bufferSize),
 	}
 
 	cmd := exec.CommandContext(ctx, command, args...)
@@ -221,15 +300,21 @@ func handleSpawnProcess(ctx context.Context, request mcp.CallToolRequest) (*mcp.
 		return mcp.NewToolResultError(fmt.Sprintf("Failed to create stderr pipe: %v", err)), nil
 	}
 
+	stdinPipe, err := cmd.StdinPipe()
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("Failed to create stdin pipe: %v", err)), nil
+	}
+
 	if err := cmd.Start(); err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("Failed to start process: %v", err)), nil
 	}
 
 	tracker.Process = cmd
 	tracker.PID = cmd.Process.Pid
+	tracker.StdinWriter = stdinPipe
 
-	go streamToBuffer(stdoutPipe, tracker.StdoutBuffer, &tracker.Mutex)
-	go streamToBuffer(stderrPipe, tracker.StderrBuffer, &tracker.Mutex)
+	go streamToRingBuffer(stdoutPipe, tracker.StdoutBuffer)
+	go streamToRingBuffer(stderrPipe, tracker.StderrBuffer)
 
 	go func() {
 		err := cmd.Wait()
@@ -267,19 +352,17 @@ func handleSpawnProcess(ctx context.Context, request mcp.CallToolRequest) (*mcp.
 	return mcp.NewToolResultText(string(resultBytes)), nil
 }
 
-func streamToBuffer(reader io.ReadCloser, buffer *bytes.Buffer, mutex *sync.RWMutex) {
+func streamToRingBuffer(reader io.ReadCloser, buffer *RingBuffer) {
 	defer reader.Close()
 	
 	scanner := bufio.NewScanner(reader)
 	for scanner.Scan() {
 		line := scanner.Text() + "\n"
-		mutex.Lock()
-		buffer.WriteString(line)
-		mutex.Unlock()
+		buffer.Write([]byte(line))
 	}
 }
 
-func handleGetProcessOutput(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func handleGetPartialProcessOutput(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	processID, err := request.RequireString("process_id")
 	if err != nil {
 		return mcp.NewToolResultError("Missing or invalid 'process_id' argument"), nil
@@ -320,16 +403,16 @@ func handleGetProcessOutput(ctx context.Context, request mcp.CallToolRequest) (*
 	}
 
 	if streams == "stdout" || streams == "both" {
-		stdout := extractNewContent(tracker.StdoutBuffer, tracker.StdoutCursor, maxLines)
+		stdout := extractNewContentFromRingBuffer(tracker.StdoutBuffer, tracker.StdoutCursor, maxLines)
 		response.Stdout = stdout
-		response.StdoutCursor = int64(tracker.StdoutBuffer.Len())
+		response.StdoutCursor = tracker.StdoutBuffer.TotalBytes()
 		tracker.StdoutCursor = response.StdoutCursor
 	}
 
 	if streams == "stderr" || streams == "both" {
-		stderr := extractNewContent(tracker.StderrBuffer, tracker.StderrCursor, maxLines)
+		stderr := extractNewContentFromRingBuffer(tracker.StderrBuffer, tracker.StderrCursor, maxLines)
 		response.Stderr = stderr
-		response.StderrCursor = int64(tracker.StderrBuffer.Len())
+		response.StderrCursor = tracker.StderrBuffer.TotalBytes()
 		tracker.StderrCursor = response.StderrCursor
 	}
 
@@ -337,14 +420,9 @@ func handleGetProcessOutput(ctx context.Context, request mcp.CallToolRequest) (*
 	return mcp.NewToolResultText(string(resultBytes)), nil
 }
 
-func extractNewContent(buffer *bytes.Buffer, cursor int64, maxLines int) string {
-	content := buffer.String()
-	if cursor >= int64(len(content)) {
-		return ""
-	}
-
-	newContent := content[cursor:]
-	if maxLines > 0 {
+func extractNewContentFromRingBuffer(buffer *RingBuffer, cursor int64, maxLines int) string {
+	newContent := buffer.GetContentFromCursor(cursor)
+	if maxLines > 0 && newContent != "" {
 		lines := strings.Split(newContent, "\n")
 		if len(lines) > maxLines {
 			lines = lines[:maxLines]
@@ -356,6 +434,122 @@ func extractNewContent(buffer *bytes.Buffer, cursor int64, maxLines int) string 
 	}
 
 	return newContent
+}
+
+func handleGetFullProcessOutput(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	processID, err := request.RequireString("process_id")
+	if err != nil {
+		return mcp.NewToolResultError("Missing or invalid 'process_id' argument"), nil
+	}
+
+	streams := "both"
+	if arguments, ok := request.Params.Arguments.(map[string]any); ok {
+		if s, exists := arguments["streams"]; exists {
+			if sStr, ok := s.(string); ok {
+				streams = sStr
+			}
+		}
+	}
+
+	maxLines := -1
+	if arguments, ok := request.Params.Arguments.(map[string]any); ok {
+		if ml, exists := arguments["max_lines"]; exists {
+			if mlFloat, ok := ml.(float64); ok {
+				maxLines = int(mlFloat)
+			}
+		}
+	}
+
+	tracker, exists := registry.getProcess(processID)
+	if !exists {
+		return mcp.NewToolResultError(fmt.Sprintf("Process %s not found", processID)), nil
+	}
+
+	tracker.Mutex.Lock()
+	defer tracker.Mutex.Unlock()
+
+	response := &OutputResponse{
+		ProcessID:    processID,
+		StdoutCursor: tracker.StdoutBuffer.TotalBytes(),
+		StderrCursor: tracker.StderrBuffer.TotalBytes(),
+		Status:       tracker.Status,
+		ExitCode:     tracker.ExitCode,
+	}
+
+	if streams == "stdout" || streams == "both" {
+		fullStdout := tracker.StdoutBuffer.GetContent()
+		if maxLines > 0 && fullStdout != "" {
+			lines := strings.Split(fullStdout, "\n")
+			if len(lines) > maxLines {
+				lines = lines[:maxLines]
+				fullStdout = strings.Join(lines, "\n")
+				if !strings.HasSuffix(fullStdout, "\n") && len(lines) > 0 {
+					fullStdout += "\n"
+				}
+			}
+		}
+		response.Stdout = fullStdout
+	}
+
+	if streams == "stderr" || streams == "both" {
+		fullStderr := tracker.StderrBuffer.GetContent()
+		if maxLines > 0 && fullStderr != "" {
+			lines := strings.Split(fullStderr, "\n")
+			if len(lines) > maxLines {
+				lines = lines[:maxLines]
+				fullStderr = strings.Join(lines, "\n")
+				if !strings.HasSuffix(fullStderr, "\n") && len(lines) > 0 {
+					fullStderr += "\n"
+				}
+			}
+		}
+		response.Stderr = fullStderr
+	}
+
+	resultBytes, _ := json.Marshal(response)
+	return mcp.NewToolResultText(string(resultBytes)), nil
+}
+
+func handleSendProcessInput(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	processID, err := request.RequireString("process_id")
+	if err != nil {
+		return mcp.NewToolResultError("Missing or invalid 'process_id' argument"), nil
+	}
+
+	input, err := request.RequireString("input")
+	if err != nil {
+		return mcp.NewToolResultError("Missing or invalid 'input' argument"), nil
+	}
+
+	tracker, exists := registry.getProcess(processID)
+	if !exists {
+		return mcp.NewToolResultError(fmt.Sprintf("Process %s not found", processID)), nil
+	}
+
+	tracker.Mutex.Lock()
+	defer tracker.Mutex.Unlock()
+
+	if tracker.Status != StatusRunning {
+		return mcp.NewToolResultError(fmt.Sprintf("Process %s is not running (status: %s)", processID, tracker.Status)), nil
+	}
+
+	if tracker.StdinWriter == nil {
+		return mcp.NewToolResultError("Process stdin is not available"), nil
+	}
+
+	_, err = tracker.StdinWriter.Write([]byte(input))
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("Failed to write to process stdin: %v", err)), nil
+	}
+
+	result := map[string]any{
+		"process_id": processID,
+		"status":     "input_sent",
+		"message":    fmt.Sprintf("Sent %d bytes to process stdin", len(input)),
+	}
+
+	resultBytes, _ := json.Marshal(result)
+	return mcp.NewToolResultText(string(resultBytes)), nil
 }
 
 func handleListProcesses(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -404,6 +598,11 @@ func handleKillProcess(ctx context.Context, request mcp.CallToolRequest) (*mcp.C
 	}
 
 	if tracker.Process != nil && tracker.Process.Process != nil {
+		// Close stdin first to signal the process
+		if tracker.StdinWriter != nil {
+			tracker.StdinWriter.Close()
+		}
+		
 		err := tracker.Process.Process.Signal(syscall.SIGTERM)
 		if err != nil {
 			tracker.Process.Process.Kill()
@@ -441,6 +640,7 @@ func handleGetProcessStatus(ctx context.Context, request mcp.CallToolRequest) (*
 		"command":       tracker.Command,
 		"args":          tracker.Args,
 		"working_dir":   tracker.WorkingDir,
+		"buffer_size":   tracker.BufferSize,
 		"start_time":    tracker.StartTime.Format(time.RFC3339),
 		"last_accessed": tracker.LastAccessed.Format(time.RFC3339),
 		"status":        string(tracker.Status),
@@ -448,6 +648,8 @@ func handleGetProcessStatus(ctx context.Context, request mcp.CallToolRequest) (*
 		"stderr_cursor": tracker.StderrCursor,
 		"stdout_size":   tracker.StdoutBuffer.Len(),
 		"stderr_size":   tracker.StderrBuffer.Len(),
+		"stdout_total":  tracker.StdoutBuffer.TotalBytes(),
+		"stderr_total":  tracker.StderrBuffer.TotalBytes(),
 	}
 
 	if tracker.ExitCode != nil {

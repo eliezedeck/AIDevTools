@@ -6,14 +6,14 @@ A Golang daemon that provides an MCP (Model Context Protocol) server for audio n
 
 - MCP server using [mark3labs/mcp-go](https://github.com/mark3labs/mcp-go)
 - **Audio Notifications**: System sound and text-to-speech (macOS only)
-- **Process Management**: Spawn, monitor, and manage long-running processes with incremental output tracking
-- **Real-time Output**: "tail -f" like functionality for process stdout/stderr
+- **Process Management**: Spawn, monitor, and manage long-running processes with ring buffer output tracking and stdin input
+- **Real-time Output**: "tail -f" like functionality with configurable 10MB ring buffers
 - **Automatic Cleanup**: Background cleanup of inactive processes (1-hour timeout)
 - **Thread-safe**: Concurrent process management with proper synchronization
 
 ## 🛠️ Installation & Usage
 
-This daemon exposes 6 MCP tools: 1 for audio notifications and 5 for process management.
+This daemon exposes 8 MCP tools: 1 for audio notifications and 7 for process management.
 
 ### 📦 Quick Installation
 
@@ -60,7 +60,7 @@ This daemon exposes 6 MCP tools: 1 for audio notifications and 5 for process man
 
 4. **Use the tools in Claude Code:**
    - Open Claude Code in your project.
-   - All 6 tools will be auto-discovered and available in the tool palette or via `/` commands.
+   - All 8 tools will be auto-discovered and available in the tool palette or via `/` commands.
    - You can now call the tools from chat, automations, or workflows.
 
 ---
@@ -101,14 +101,15 @@ Plays system sound and speaks text using macOS TTS.
 ### Process Management
 
 #### `spawn_process`
-Spawn a new process and start tracking its output with color output disabled.
+Spawn a new process and start tracking its output with configurable ring buffer size.
 
-| Argument    | Type   | Required | Description                    |
-|-------------|--------|----------|--------------------------------|
-| command     | string |   ✅     | Command to execute             |
-| args        | array  |   ❌     | Command arguments              |
-| working_dir | string |   ❌     | Working directory              |
-| env         | object |   ❌     | Environment variables          |
+| Argument    | Type   | Required | Description                           |
+|-------------|--------|----------|---------------------------------------|
+| command     | string |   ✅     | Command to execute                    |
+| args        | array  |   ❌     | Command arguments                     |
+| working_dir | string |   ❌     | Working directory                     |
+| env         | object |   ❌     | Environment variables                 |
+| buffer_size | number |   ❌     | Ring buffer size in bytes (default: 10MB) |
 
 **Example:**
 ```json
@@ -117,12 +118,13 @@ Spawn a new process and start tracking its output with color output disabled.
   "args": {
     "command": "npm",
     "args": ["run", "dev"],
-    "working_dir": "/path/to/project"
+    "working_dir": "/path/to/project",
+    "buffer_size": 5242880
   }
 }
 ```
 
-#### `get_process_output`
+#### `get_partial_process_output`
 Get incremental output from a process since last read (tail -f functionality).
 
 | Argument   | Type    | Required | Description                           |
@@ -134,11 +136,50 @@ Get incremental output from a process since last read (tail -f functionality).
 **Example:**
 ```json
 {
-  "tool": "get_process_output",
+  "tool": "get_partial_process_output",
   "args": {
     "process_id": "abc123",
     "streams": "both",
     "max_lines": 50
+  }
+}
+```
+
+#### `get_full_process_output`
+Get the complete output from a process (all data currently in memory).
+
+| Argument   | Type    | Required | Description                           |
+|------------|---------|----------|---------------------------------------|
+| process_id | string  |   ✅     | Process identifier                    |
+| streams    | string  |   ❌     | "stdout", "stderr", or "both" (default) |
+| max_lines  | number  |   ❌     | Maximum lines to return               |
+
+**Example:**
+```json
+{
+  "tool": "get_full_process_output",
+  "args": {
+    "process_id": "abc123",
+    "streams": "stdout"
+  }
+}
+```
+
+#### `send_process_input`
+Send input data to a running process's stdin.
+
+| Argument   | Type   | Required | Description                  |
+|------------|--------|----------|------------------------------|
+| process_id | string |   ✅     | Process identifier           |
+| input      | string |   ✅     | Input data to send to stdin  |
+
+**Example:**
+```json
+{
+  "tool": "send_process_input",
+  "args": {
+    "process_id": "abc123",
+    "input": "yes\n"
   }
 }
 ```
@@ -201,9 +242,12 @@ Get detailed status information about a process.
 
 ### Process Management
 - **Thread-safe**: Uses `sync.RWMutex` for concurrent access to process registry and individual process data
-- **Incremental Output**: Cursor-based reading tracks exact position in stdout/stderr buffers
-- **Memory Management**: All output stored in memory with automatic cleanup after 1 hour of inactivity
-- **Background Cleanup**: Goroutine runs every 15 minutes to remove stale processes
+- **Ring Buffer Output**: Configurable ring buffer (default 10MB) prevents unbounded memory growth for long-running processes
+- **Incremental Output**: Cursor-based reading tracks exact position in stdout/stderr streams with proper handling of discarded data
+- **Full Output Access**: Can retrieve complete process output currently in memory or just incremental changes
+- **Stdin Support**: Send input to running processes via stdin pipe with proper error handling
+- **Memory Management**: Ring buffers automatically discard old data when size limit is reached, with 1-hour cleanup timeout
+- **Background Cleanup**: Goroutine runs every 15 minutes to remove stale processes and free resources
 - **Color-free Output**: Spawned processes have `NO_COLOR=1` and `TERM=dumb` environment variables set
 - **Process Status Tracking**: Real-time monitoring of running, completed, failed, and killed processes
 - **UUID Process IDs**: Each spawned process gets a unique identifier for tracking
@@ -211,8 +255,10 @@ Get detailed status information about a process.
 ## 📝 Notes
 - macOS only (uses `afplay` and `say` for notifications)
 - Requires MCP-compatible client (e.g. Claude Code)
-- Process output is kept in memory until automatic cleanup (1-hour timeout)
+- Process output stored in configurable ring buffers (default 10MB) with automatic cleanup (1-hour timeout)
 - Color output is automatically disabled for clean parsing
+- Ring buffers prevent memory issues with long-running processes by discarding old data when limits are reached
+- Processes support stdin input for interactive command execution
 
 ## 🧑‍💻 Development
 
