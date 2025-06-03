@@ -101,17 +101,19 @@ Plays system sound and speaks text using macOS TTS.
 ### Process Management
 
 #### `spawn_process`
-Spawn a new process and start tracking its output with configurable ring buffer size.
+Spawn a new process and start tracking its output with configurable ring buffer size and optional delay functionality.
 
-| Argument    | Type   | Required | Description                           |
-|-------------|--------|----------|---------------------------------------|
-| command     | string |   ✅     | Command to execute                    |
-| args        | array  |   ❌     | Command arguments                     |
-| working_dir | string |   ❌     | Working directory                     |
-| env         | object |   ❌     | Environment variables                 |
-| buffer_size | number |   ❌     | Ring buffer size in bytes (default: 10MB) |
+| Argument      | Type    | Required | Description                           |
+|---------------|---------|----------|---------------------------------------|
+| command       | string  |   ✅     | Command to execute                    |
+| args          | array   |   ❌     | Command arguments                     |
+| working_dir   | string  |   ❌     | Working directory                     |
+| env           | object  |   ❌     | Environment variables                 |
+| buffer_size   | number  |   ❌     | Ring buffer size in bytes (default: 10MB) |
+| delay         | number  |   ❌     | Delay before execution in milliseconds (max: 5 minutes) |
+| sync_delay    | boolean |   ❌     | If true, waits for delay then returns; if false, returns immediately with "pending" status (default: false) |
 
-**Example:**
+**Examples:**
 ```json
 {
   "tool": "spawn_process", 
@@ -124,16 +126,29 @@ Spawn a new process and start tracking its output with configurable ring buffer 
 }
 ```
 
+```json
+{
+  "tool": "spawn_process",
+  "args": {
+    "command": "echo",
+    "args": ["Delayed execution"],
+    "delay": 3000,
+    "sync_delay": false
+  }
+}
+```
+
 #### `get_partial_process_output`
-Get incremental output from a process since last read (tail -f functionality).
+Get incremental output from a process since last read (tail -f functionality) with optional smart delay.
 
 | Argument   | Type    | Required | Description                           |
 |------------|---------|----------|---------------------------------------|
 | process_id | string  |   ✅     | Process identifier                    |
 | streams    | string  |   ❌     | "stdout", "stderr", or "both" (default) |
 | max_lines  | number  |   ❌     | Maximum lines to return               |
+| delay      | number  |   ❌     | Delay before returning output in milliseconds (max: 2 minutes, early termination if process completes) |
 
-**Example:**
+**Examples:**
 ```json
 {
   "tool": "get_partial_process_output",
@@ -145,22 +160,43 @@ Get incremental output from a process since last read (tail -f functionality).
 }
 ```
 
+```json
+{
+  "tool": "get_partial_process_output",
+  "args": {
+    "process_id": "abc123",
+    "delay": 5000
+  }
+}
+```
+
 #### `get_full_process_output`
-Get the complete output from a process (all data currently in memory).
+Get the complete output from a process (all data currently in memory) with optional smart delay.
 
 | Argument   | Type    | Required | Description                           |
 |------------|---------|----------|---------------------------------------|
 | process_id | string  |   ✅     | Process identifier                    |
 | streams    | string  |   ❌     | "stdout", "stderr", or "both" (default) |
 | max_lines  | number  |   ❌     | Maximum lines to return               |
+| delay      | number  |   ❌     | Delay before returning output in milliseconds (max: 2 minutes, early termination if process completes) |
 
-**Example:**
+**Examples:**
 ```json
 {
   "tool": "get_full_process_output",
   "args": {
     "process_id": "abc123",
     "streams": "stdout"
+  }
+}
+```
+
+```json
+{
+  "tool": "get_full_process_output",
+  "args": {
+    "process_id": "abc123",
+    "delay": 3000
   }
 }
 ```
@@ -251,6 +287,8 @@ Get detailed status information about a process.
 - **Color-free Output**: Spawned processes have `NO_COLOR=1` and `TERM=dumb` environment variables set
 - **Process Status Tracking**: Real-time monitoring of running, completed, failed, and killed processes
 - **UUID Process IDs**: Each spawned process gets a unique identifier for tracking
+- **Smart Delay System**: Process spawning supports sync/async delays (max 5 minutes), output tools support delays with early termination (max 2 minutes)
+- **Pending Status**: Async delayed processes show "pending" status until delay completes and execution begins
 
 ## 📝 Notes
 - macOS only (uses `afplay` and `say` for notifications)
