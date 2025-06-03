@@ -56,10 +56,10 @@ func main() {
 			mcp.Description("Whether to combine stdout and stderr into single stream (default: false)"),
 		),
 		mcp.WithNumber("delay",
-			mcp.Description("Delay before starting process in milliseconds (max: 300000 = 5 minutes)"),
+			mcp.Description("Delay in milliseconds before starting process (max: 300000 = 5 minutes). With sync_delay=false, returns immediately with 'pending' status and executes after delay. With sync_delay=true, waits for delay then starts process before returning with 'running' status"),
 		),
 		mcp.WithBoolean("sync_delay",
-			mcp.Description("Whether delay blocks caller (true) or returns immediately (false, default)"),
+			mcp.Description("Controls delay behavior: false (default) = return immediately with 'pending' status, execute later; true = wait for delay, start process, then return with 'running' status"),
 		),
 		mcp.WithString("name",
 			mcp.Description("Optional human-readable name for the process (non-unique)"),
@@ -84,7 +84,7 @@ func main() {
 			mcp.Description("Optional command pipeline - each element is [command, ...args]"),
 		),
 		mcp.WithNumber("delay",
-			mcp.Description("Delay before returning output in milliseconds (max: 120000 = 2 minutes)"),
+			mcp.Description("Delay before returning output in milliseconds (max: 120000 = 2 minutes). Smart delay with early termination - if process completes during delay, returns immediately with output"),
 		),
 	)
 
@@ -106,7 +106,7 @@ func main() {
 			mcp.Description("Optional command pipeline - each element is [command, ...args]"),
 		),
 		mcp.WithNumber("delay",
-			mcp.Description("Delay before returning output in milliseconds (max: 120000 = 2 minutes)"),
+			mcp.Description("Delay before returning output in milliseconds (max: 120000 = 2 minutes). Smart delay with early termination - if process completes during delay, returns immediately with output"),
 		),
 	)
 
@@ -148,10 +148,10 @@ func main() {
 
 	spawnMultipleProcessesTool := mcp.NewTool(
 		"spawn_multiple_processes",
-		mcp.WithDescription("Spawn multiple processes with individual delays and configurations"),
+		mcp.WithDescription("Spawn multiple processes sequentially with individual delays. Delays are cumulative (each delay occurs after previous process scheduled). In async mode (sync_delay=false for any process with delay>0), returns immediately - initial no-delay processes show 'running', first delayed process and all subsequent show 'pending'. In sync mode (all sync_delay=true), waits for all processes to start before returning with 'running' status"),
 		mcp.WithArray("processes",
 			mcp.Required(),
-			mcp.Description("Array of process configurations to spawn"),
+			mcp.Description("Array of process configurations. Each supports: command (required), args, name, working_dir, env, buffer_size, delay (ms), sync_delay (bool). Delays are sequential - process N waits for its delay after process N-1 is scheduled"),
 		),
 	)
 
