@@ -108,9 +108,7 @@ func (rb *RingBuffer) GetContentFromCursor(cursor int64) string {
 	discardedBytes := rb.totalBytes - int64(len(rb.data))
 	effectivePos := cursor - discardedBytes
 
-	if effectivePos < 0 {
-		effectivePos = 0
-	}
+	effectivePos = max(effectivePos, 0)
 	if effectivePos >= int64(len(rb.data)) {
 		return ""
 	}
@@ -132,20 +130,44 @@ func (rb *RingBuffer) TotalBytes() int64 {
 
 // Whitelist of allowed filter commands for security
 var allowedCommands = map[string]bool{
-	"grep":   true,
-	"awk":    true,
-	"sed":    true,
-	"head":   true,
-	"tail":   true,
-	"cut":    true,
-	"sort":   true,
-	"uniq":   true,
-	"wc":     true,
-	"tr":     true,
-	"column": true,
-	"jq":     true,
-	"cat":    true,
-	"tee":    true,
+	// Text Search & Pattern Matching
+	"grep": true, // search text using patterns
+	"rg":   true, // ripgrep - faster grep alternative with better defaults
+	"awk":  true, // pattern scanning and processing language
+	"sed":  true, // stream editor for filtering and transforming text
+
+	// Text Extraction & Display
+	"head": true, // output first part of files
+	"tail": true, // output last part of files
+	"cut":  true, // extract columns from lines
+	"cat":  true, // concatenate and display files
+	"tee":  true, // read from input and write to output and files
+
+	// Text Sorting & Deduplication
+	"sort": true, // sort lines of text files
+	"uniq": true, // report or omit repeated lines
+
+	// Text Analysis & Counting
+	"wc": true, // word, line, character, and byte count
+
+	// Text Transformation
+	"tr":       true, // translate or delete characters
+	"column":   true, // columnate lists
+	"fold":     true, // wrap each input line to fit specified width
+	"expand":   true, // convert tabs to spaces
+	"unexpand": true, // convert spaces to tabs
+	"nl":       true, // number lines of files
+	"paste":    true, // merge lines of files
+
+	// JSON Processing
+	"jq": true, // command-line JSON processor
+
+	// Binary Data & Encoding
+	"od":       true, // octal dump - display files in various formats
+	"hexdump":  true, // ASCII, decimal, hexadecimal, octal dump
+	"base64":   true, // base64 encode/decode data
+	"uuencode": true, // encode binary file for transmission
+	"uudecode": true, // decode a file created by uuencode
 }
 
 // Filter timeout - prevent hanging commands
