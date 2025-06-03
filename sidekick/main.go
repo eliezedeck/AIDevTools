@@ -51,6 +51,12 @@ func main() {
 		mcp.WithBoolean("combine_output",
 			mcp.Description("Whether to combine stdout and stderr into single stream (default: false)"),
 		),
+		mcp.WithNumber("delay",
+			mcp.Description("Delay before starting process in milliseconds (max: 300000 = 5 minutes)"),
+		),
+		mcp.WithBoolean("sync_delay",
+			mcp.Description("Whether delay blocks caller (true) or returns immediately (false, default)"),
+		),
 	)
 
 	getPartialProcessOutputTool := mcp.NewTool(
@@ -70,6 +76,9 @@ func main() {
 		mcp.WithArray("filters",
 			mcp.Description("Optional command pipeline - each element is [command, ...args]"),
 		),
+		mcp.WithNumber("delay",
+			mcp.Description("Delay before returning output in milliseconds (max: 120000 = 2 minutes)"),
+		),
 	)
 
 	getFullProcessOutputTool := mcp.NewTool(
@@ -88,6 +97,9 @@ func main() {
 		),
 		mcp.WithArray("filters",
 			mcp.Description("Optional command pipeline - each element is [command, ...args]"),
+		),
+		mcp.WithNumber("delay",
+			mcp.Description("Delay before returning output in milliseconds (max: 120000 = 2 minutes)"),
 		),
 	)
 

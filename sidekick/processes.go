@@ -20,6 +20,7 @@ import (
 type ProcessStatus string
 
 const (
+	StatusPending   ProcessStatus = "pending"
 	StatusRunning   ProcessStatus = "running"
 	StatusCompleted ProcessStatus = "completed"
 	StatusFailed    ProcessStatus = "failed"
@@ -34,6 +35,8 @@ type ProcessTracker struct {
 	WorkingDir    string         `json:"working_dir"`
 	BufferSize    int64          `json:"buffer_size"`
 	CombineOutput bool           `json:"combine_output"`
+	DelayStart    time.Duration  `json:"delay_start"`
+	SyncDelay     bool           `json:"sync_delay"`
 	StartTime     time.Time      `json:"start_time"`
 	LastAccessed  time.Time      `json:"last_accessed"`
 	Status        ProcessStatus  `json:"status"`
@@ -63,7 +66,10 @@ type ProcessRegistry struct {
 }
 
 const (
-	DefaultBufferSize = 10 * 1024 * 1024 // 10MB default buffer size
+	DefaultBufferSize     = 10 * 1024 * 1024 // 10MB default buffer size
+	MaxOutputDelay        = 120000            // 2 minutes max delay for output tools
+	MaxSpawnDelay         = 300000            // 5 minutes max delay for spawn_process
+	DelayCheckInterval    = 100               // Check process status every 100ms during delay
 )
 
 type RingBuffer struct {
@@ -304,6 +310,126 @@ func (r *ProcessRegistry) removeProcess(id string) {
 	delete(r.processes, id)
 }
 
+// executeDelayedProcess actually starts the process after any delay
+func executeDelayedProcess(ctx context.Context, tracker *ProcessTracker, envVars map[string]string) error {
+	cmd := exec.CommandContext(ctx, tracker.Command, tracker.Args...)
+	if tracker.WorkingDir != "" {
+		cmd.Dir = tracker.WorkingDir
+	}
+
+	env := os.Environ()
+	env = append(env, "NO_COLOR=1", "TERM=dumb")
+	for k, v := range envVars {
+		env = append(env, fmt.Sprintf("%s=%s", k, v))
+	}
+	cmd.Env = env
+
+	stdinPipe, err := cmd.StdinPipe()
+	if err != nil {
+		tracker.Mutex.Lock()
+		tracker.Status = StatusFailed
+		tracker.Mutex.Unlock()
+		return fmt.Errorf("failed to create stdin pipe: %v", err)
+	}
+
+	if tracker.CombineOutput {
+		// When combining output, redirect both stdout and stderr to the same buffer
+		stdoutPipe, err := cmd.StdoutPipe()
+		if err != nil {
+			tracker.Mutex.Lock()
+			tracker.Status = StatusFailed
+			tracker.Mutex.Unlock()
+			return fmt.Errorf("failed to create stdout pipe: %v", err)
+		}
+		
+		stderrPipe, err := cmd.StderrPipe()
+		if err != nil {
+			tracker.Mutex.Lock()
+			tracker.Status = StatusFailed
+			tracker.Mutex.Unlock()
+			return fmt.Errorf("failed to create stderr pipe: %v", err)
+		}
+
+		if err := cmd.Start(); err != nil {
+			tracker.Mutex.Lock()
+			tracker.Status = StatusFailed
+			tracker.Mutex.Unlock()
+			return fmt.Errorf("failed to start process: %v", err)
+		}
+
+		tracker.Mutex.Lock()
+		tracker.Process = cmd
+		tracker.PID = cmd.Process.Pid
+		tracker.StdinWriter = stdinPipe
+		tracker.Status = StatusRunning
+		tracker.Mutex.Unlock()
+
+		// Stream both stdout and stderr to the same buffer (chronological order preserved)
+		go streamToRingBuffer(stdoutPipe, tracker.StdoutBuffer)
+		go streamToRingBuffer(stderrPipe, tracker.StdoutBuffer)
+	} else {
+		// Separate output streams
+		stdoutPipe, err := cmd.StdoutPipe()
+		if err != nil {
+			tracker.Mutex.Lock()
+			tracker.Status = StatusFailed
+			tracker.Mutex.Unlock()
+			return fmt.Errorf("failed to create stdout pipe: %v", err)
+		}
+
+		stderrPipe, err := cmd.StderrPipe()
+		if err != nil {
+			tracker.Mutex.Lock()
+			tracker.Status = StatusFailed
+			tracker.Mutex.Unlock()
+			return fmt.Errorf("failed to create stderr pipe: %v", err)
+		}
+
+		if err := cmd.Start(); err != nil {
+			tracker.Mutex.Lock()
+			tracker.Status = StatusFailed
+			tracker.Mutex.Unlock()
+			return fmt.Errorf("failed to start process: %v", err)
+		}
+
+		tracker.Mutex.Lock()
+		tracker.Process = cmd
+		tracker.PID = cmd.Process.Pid
+		tracker.StdinWriter = stdinPipe
+		tracker.Status = StatusRunning
+		tracker.Mutex.Unlock()
+
+		go streamToRingBuffer(stdoutPipe, tracker.StdoutBuffer)
+		go streamToRingBuffer(stderrPipe, tracker.StderrBuffer)
+	}
+
+	go func() {
+		err := cmd.Wait()
+		tracker.Mutex.Lock()
+		defer tracker.Mutex.Unlock()
+		
+		if err != nil {
+			if exitError, ok := err.(*exec.ExitError); ok {
+				exitCode := exitError.ExitCode()
+				tracker.ExitCode = &exitCode
+				if exitCode != 0 {
+					tracker.Status = StatusFailed
+				} else {
+					tracker.Status = StatusCompleted
+				}
+			} else {
+				tracker.Status = StatusFailed
+			}
+		} else {
+			exitCode := 0
+			tracker.ExitCode = &exitCode
+			tracker.Status = StatusCompleted
+		}
+	}()
+
+	return nil
+}
+
 func handleSpawnProcess(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	command, err := request.RequireString("command")
 	if err != nil {
@@ -363,6 +489,31 @@ func handleSpawnProcess(ctx context.Context, request mcp.CallToolRequest) (*mcp.
 		}
 	}
 
+	delay := time.Duration(0)
+	if arguments, ok := request.Params.Arguments.(map[string]any); ok {
+		if d, exists := arguments["delay"]; exists {
+			if dFloat, ok := d.(float64); ok {
+				delayMs := int64(dFloat)
+				if delayMs > MaxSpawnDelay {
+					return mcp.NewToolResultError(fmt.Sprintf("Delay cannot exceed %d milliseconds (5 minutes)", MaxSpawnDelay)), nil
+				}
+				if delayMs < 0 {
+					return mcp.NewToolResultError("Delay cannot be negative"), nil
+				}
+				delay = time.Duration(delayMs) * time.Millisecond
+			}
+		}
+	}
+
+	syncDelay := false
+	if arguments, ok := request.Params.Arguments.(map[string]any); ok {
+		if sd, exists := arguments["sync_delay"]; exists {
+			if sdBool, ok := sd.(bool); ok {
+				syncDelay = sdBool
+			}
+		}
+	}
+
 	processID := uuid.New().String()
 	tracker := &ProcessTracker{
 		ID:            processID,
@@ -371,9 +522,11 @@ func handleSpawnProcess(ctx context.Context, request mcp.CallToolRequest) (*mcp.
 		WorkingDir:    workingDir,
 		BufferSize:    bufferSize,
 		CombineOutput: combineOutput,
+		DelayStart:    delay,
+		SyncDelay:     syncDelay,
 		StartTime:     time.Now(),
 		LastAccessed:  time.Now(),
-		Status:        StatusRunning,
+		Status:        StatusRunning, // Will be changed based on delay logic
 		StdoutBuffer:  NewRingBuffer(bufferSize),
 	}
 
@@ -382,100 +535,57 @@ func handleSpawnProcess(ctx context.Context, request mcp.CallToolRequest) (*mcp.
 		tracker.StderrBuffer = NewRingBuffer(bufferSize)
 	}
 
-	cmd := exec.CommandContext(ctx, command, args...)
-	if workingDir != "" {
-		cmd.Dir = workingDir
-	}
-
-	env := os.Environ()
-	env = append(env, "NO_COLOR=1", "TERM=dumb")
-	for k, v := range envVars {
-		env = append(env, fmt.Sprintf("%s=%s", k, v))
-	}
-	cmd.Env = env
-
-	stdinPipe, err := cmd.StdinPipe()
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("Failed to create stdin pipe: %v", err)), nil
-	}
-
-	if combineOutput {
-		// When combining output, redirect both stdout and stderr to the same buffer
-		stdoutPipe, err := cmd.StdoutPipe()
-		if err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("Failed to create stdout pipe: %v", err)), nil
-		}
-
-		stderrPipe, err := cmd.StderrPipe()
-		if err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("Failed to create stderr pipe: %v", err)), nil
-		}
-
-		if err := cmd.Start(); err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("Failed to start process: %v", err)), nil
-		}
-
-		tracker.Process = cmd
-		tracker.PID = cmd.Process.Pid
-		tracker.StdinWriter = stdinPipe
-
-		// Stream both stdout and stderr to the same buffer (chronological order preserved)
-		go streamToRingBuffer(stdoutPipe, tracker.StdoutBuffer)
-		go streamToRingBuffer(stderrPipe, tracker.StdoutBuffer)
-	} else {
-		// Separate output streams
-		stdoutPipe, err := cmd.StdoutPipe()
-		if err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("Failed to create stdout pipe: %v", err)), nil
-		}
-
-		stderrPipe, err := cmd.StderrPipe()
-		if err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("Failed to create stderr pipe: %v", err)), nil
-		}
-
-		if err := cmd.Start(); err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("Failed to start process: %v", err)), nil
-		}
-
-		tracker.Process = cmd
-		tracker.PID = cmd.Process.Pid
-		tracker.StdinWriter = stdinPipe
-
-		go streamToRingBuffer(stdoutPipe, tracker.StdoutBuffer)
-		go streamToRingBuffer(stderrPipe, tracker.StderrBuffer)
-	}
-
-	go func() {
-		err := cmd.Wait()
-		tracker.Mutex.Lock()
-		defer tracker.Mutex.Unlock()
-
-		if err != nil {
-			if exitError, ok := err.(*exec.ExitError); ok {
-				exitCode := exitError.ExitCode()
-				tracker.ExitCode = &exitCode
-				if exitCode != 0 {
-					tracker.Status = StatusFailed
-				} else {
-					tracker.Status = StatusCompleted
-				}
-			} else {
-				tracker.Status = StatusFailed
+	// Handle delay logic
+	var result map[string]any
+	if delay > 0 {
+		if syncDelay {
+			// Sync mode: wait the delay, then execute and return actual status
+			time.Sleep(delay)
+			
+			err := executeDelayedProcess(ctx, tracker, envVars)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
 			}
+			
+			registry.addProcess(tracker)
+			
+			result = map[string]any{
+				"process_id": processID,
+				"pid":        tracker.PID,
+				"status":     string(tracker.Status),
+			}
+			
 		} else {
-			exitCode := 0
-			tracker.ExitCode = &exitCode
-			tracker.Status = StatusCompleted
+			// Async mode: set pending status, register immediately, start background delay
+			tracker.Status = StatusPending
+			registry.addProcess(tracker)
+			
+			// Start background goroutine to wait and then execute
+			go func() {
+				time.Sleep(delay)
+				executeDelayedProcess(context.Background(), tracker, envVars)
+			}()
+			
+			result = map[string]any{
+				"process_id": processID,
+				"pid":        0, // No PID yet since process hasn't started
+				"status":     string(tracker.Status),
+			}
 		}
-	}()
-
-	registry.addProcess(tracker)
-
-	result := map[string]any{
-		"process_id": processID,
-		"pid":        tracker.PID,
-		"status":     string(tracker.Status),
+	} else {
+		// No delay: execute immediately (original behavior)
+		err := executeDelayedProcess(ctx, tracker, envVars)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		
+		registry.addProcess(tracker)
+		
+		result = map[string]any{
+			"process_id": processID,
+			"pid":        tracker.PID,
+			"status":     string(tracker.Status),
+		}
 	}
 
 	resultBytes, _ := json.Marshal(result)
@@ -538,9 +648,53 @@ func handleGetPartialProcessOutput(ctx context.Context, request mcp.CallToolRequ
 		}
 	}
 
+	// Parse delay parameter
+	delay := time.Duration(0)
+	if arguments, ok := request.Params.Arguments.(map[string]any); ok {
+		if d, exists := arguments["delay"]; exists {
+			if dFloat, ok := d.(float64); ok {
+				delayMs := int64(dFloat)
+				if delayMs > MaxOutputDelay {
+					return mcp.NewToolResultError(fmt.Sprintf("Delay cannot exceed %d milliseconds (2 minutes)", MaxOutputDelay)), nil
+				}
+				if delayMs < 0 {
+					return mcp.NewToolResultError("Delay cannot be negative"), nil
+				}
+				delay = time.Duration(delayMs) * time.Millisecond
+			}
+		}
+	}
+
 	tracker, exists := registry.getProcess(processID)
 	if !exists {
 		return mcp.NewToolResultError(fmt.Sprintf("Process %s not found", processID)), nil
+	}
+
+	// Implement smart delay logic
+	if delay > 0 {
+		ticker := time.NewTicker(time.Duration(DelayCheckInterval) * time.Millisecond)
+		defer ticker.Stop()
+		
+		remaining := delay
+		for remaining > 0 {
+			select {
+			case <-ticker.C:
+				// Check if process has terminated
+				tracker.Mutex.RLock()
+				status := tracker.Status
+				tracker.Mutex.RUnlock()
+				
+				if status != StatusRunning && status != StatusPending {
+					// Process terminated, return immediately
+					break
+				}
+				remaining -= time.Duration(DelayCheckInterval) * time.Millisecond
+				
+			case <-ctx.Done():
+				// Context cancelled
+				return mcp.NewToolResultError("Request cancelled"), nil
+			}
+		}
 	}
 
 	tracker.Mutex.Lock()
@@ -686,9 +840,53 @@ func handleGetFullProcessOutput(ctx context.Context, request mcp.CallToolRequest
 		}
 	}
 
+	// Parse delay parameter
+	delay := time.Duration(0)
+	if arguments, ok := request.Params.Arguments.(map[string]any); ok {
+		if d, exists := arguments["delay"]; exists {
+			if dFloat, ok := d.(float64); ok {
+				delayMs := int64(dFloat)
+				if delayMs > MaxOutputDelay {
+					return mcp.NewToolResultError(fmt.Sprintf("Delay cannot exceed %d milliseconds (2 minutes)", MaxOutputDelay)), nil
+				}
+				if delayMs < 0 {
+					return mcp.NewToolResultError("Delay cannot be negative"), nil
+				}
+				delay = time.Duration(delayMs) * time.Millisecond
+			}
+		}
+	}
+
 	tracker, exists := registry.getProcess(processID)
 	if !exists {
 		return mcp.NewToolResultError(fmt.Sprintf("Process %s not found", processID)), nil
+	}
+
+	// Implement smart delay logic
+	if delay > 0 {
+		ticker := time.NewTicker(time.Duration(DelayCheckInterval) * time.Millisecond)
+		defer ticker.Stop()
+		
+		remaining := delay
+		for remaining > 0 {
+			select {
+			case <-ticker.C:
+				// Check if process has terminated
+				tracker.Mutex.RLock()
+				status := tracker.Status
+				tracker.Mutex.RUnlock()
+				
+				if status != StatusRunning && status != StatusPending {
+					// Process terminated, return immediately
+					break
+				}
+				remaining -= time.Duration(DelayCheckInterval) * time.Millisecond
+				
+			case <-ctx.Done():
+				// Context cancelled
+				return mcp.NewToolResultError("Request cancelled"), nil
+			}
+		}
 	}
 
 	tracker.Mutex.Lock()
@@ -861,6 +1059,8 @@ func handleListProcesses(ctx context.Context, request mcp.CallToolRequest) (*mcp
 			"working_dir":    tracker.WorkingDir,
 			"buffer_size":    tracker.BufferSize,
 			"combine_output": tracker.CombineOutput,
+			"delay_start":    int64(tracker.DelayStart / time.Millisecond),
+			"sync_delay":     tracker.SyncDelay,
 			"start_time":     tracker.StartTime.Format(time.RFC3339),
 			"last_accessed":  tracker.LastAccessed.Format(time.RFC3339),
 			"status":         string(tracker.Status),
@@ -939,6 +1139,8 @@ func handleGetProcessStatus(ctx context.Context, request mcp.CallToolRequest) (*
 		"working_dir":    tracker.WorkingDir,
 		"buffer_size":    tracker.BufferSize,
 		"combine_output": tracker.CombineOutput,
+		"delay_start":    int64(tracker.DelayStart / time.Millisecond),
+		"sync_delay":     tracker.SyncDelay,
 		"start_time":     tracker.StartTime.Format(time.RFC3339),
 		"last_accessed":  tracker.LastAccessed.Format(time.RFC3339),
 		"status":         string(tracker.Status),
