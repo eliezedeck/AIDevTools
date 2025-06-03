@@ -29,6 +29,7 @@ const (
 
 type ProcessTracker struct {
 	ID            string         `json:"id"`
+	Name          string         `json:"name,omitempty"`
 	PID           int            `json:"pid"`
 	Command       string         `json:"command"`
 	Args          []string       `json:"args"`
@@ -519,9 +520,19 @@ func handleSpawnProcess(ctx context.Context, request mcp.CallToolRequest) (*mcp.
 		}
 	}
 
+	name := ""
+	if arguments, ok := request.Params.Arguments.(map[string]any); ok {
+		if n, exists := arguments["name"]; exists {
+			if nStr, ok := n.(string); ok {
+				name = nStr
+			}
+		}
+	}
+
 	processID := uuid.New().String()
 	tracker := &ProcessTracker{
 		ID:            processID,
+		Name:          name,
 		Command:       command,
 		Args:          args,
 		WorkingDir:    workingDir,
@@ -594,6 +605,228 @@ func handleSpawnProcess(ctx context.Context, request mcp.CallToolRequest) (*mcp.
 	}
 
 	resultBytes, _ := json.Marshal(result)
+	return mcp.NewToolResultText(string(resultBytes)), nil
+}
+
+func handleSpawnMultipleProcesses(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	// Parse the processes array
+	var processes []map[string]any
+	if arguments, ok := request.Params.Arguments.(map[string]any); ok {
+		if procs, exists := arguments["processes"]; exists {
+			if procsList, ok := procs.([]any); ok {
+				for _, proc := range procsList {
+					if procMap, ok := proc.(map[string]any); ok {
+						processes = append(processes, procMap)
+					}
+				}
+			}
+		}
+	}
+	
+	if len(processes) == 0 {
+		return mcp.NewToolResultError("No processes specified"), nil
+	}
+	
+	// Results to return
+	results := []map[string]any{}
+	
+	// Deferred process info
+	type processInfo struct {
+		index      int
+		tracker    *ProcessTracker
+		envVars    map[string]string
+		name       string
+		processID  string
+	}
+	
+	var deferredProcesses []processInfo
+	var deferredMode bool
+	
+	// Process each configuration
+	for i, procConfig := range processes {
+		// Extract configuration for this process
+		command, exists := procConfig["command"].(string)
+		if !exists {
+			return mcp.NewToolResultError(fmt.Sprintf("Process %d missing required 'command' field", i)), nil
+		}
+		
+		// Extract optional args
+		args := []string{}
+		if argsInterface, exists := procConfig["args"]; exists {
+			if argsList, ok := argsInterface.([]any); ok {
+				for _, arg := range argsList {
+					if argStr, ok := arg.(string); ok {
+						args = append(args, argStr)
+					}
+				}
+			}
+		}
+		
+		// Extract optional fields
+		name, _ := procConfig["name"].(string)
+		workingDir, _ := procConfig["working_dir"].(string)
+		
+		// Extract env vars
+		envVars := map[string]string{}
+		if env, exists := procConfig["env"]; exists {
+			if envMap, ok := env.(map[string]any); ok {
+				for k, v := range envMap {
+					if vStr, ok := v.(string); ok {
+						envVars[k] = vStr
+					}
+				}
+			}
+		}
+		
+		// Extract buffer size
+		bufferSize := int64(DefaultBufferSize)
+		if bs, exists := procConfig["buffer_size"]; exists {
+			if bsFloat, ok := bs.(float64); ok {
+				bufferSize = int64(bsFloat)
+			}
+		}
+		
+		// Extract combine output
+		combineOutput := false
+		if co, exists := procConfig["combine_output"]; exists {
+			if coBool, ok := co.(bool); ok {
+				combineOutput = coBool
+			}
+		}
+		
+		// Extract delay
+		delay := time.Duration(0)
+		if d, exists := procConfig["delay"]; exists {
+			if dFloat, ok := d.(float64); ok {
+				delayMs := int64(dFloat)
+				if delayMs > MaxSpawnDelay {
+					return mcp.NewToolResultError(fmt.Sprintf("Process %d: Delay cannot exceed %d milliseconds (5 minutes)", i, MaxSpawnDelay)), nil
+				}
+				if delayMs < 0 {
+					return mcp.NewToolResultError(fmt.Sprintf("Process %d: Delay cannot be negative", i)), nil
+				}
+				delay = time.Duration(delayMs) * time.Millisecond
+			}
+		}
+		
+		// Extract sync_delay
+		syncDelay := false
+		if sd, exists := procConfig["sync_delay"]; exists {
+			if sdBool, ok := sd.(bool); ok {
+				syncDelay = sdBool
+			}
+		}
+		
+		// Create tracker
+		processID := uuid.New().String()
+		tracker := &ProcessTracker{
+			ID:            processID,
+			Name:          name,
+			Command:       command,
+			Args:          args,
+			WorkingDir:    workingDir,
+			BufferSize:    bufferSize,
+			CombineOutput: combineOutput,
+			DelayStart:    delay,
+			SyncDelay:     syncDelay,
+			StartTime:     time.Now(),
+			LastAccessed:  time.Now(),
+			Status:        StatusRunning,
+			StdoutBuffer:  NewRingBuffer(bufferSize),
+		}
+		
+		if !combineOutput {
+			tracker.StderrBuffer = NewRingBuffer(bufferSize)
+		}
+		
+		
+		// Determine if we need to defer this process
+		shouldDefer := deferredMode || (!syncDelay && (delay > 0 || deferredMode))
+		
+		if shouldDefer {
+			// We're in deferred mode - add to deferred list
+			deferredMode = true
+			tracker.Status = StatusPending
+			registry.addProcess(tracker)
+			
+			deferredProcesses = append(deferredProcesses, processInfo{
+				index:     i,
+				tracker:   tracker,
+				envVars:   envVars,
+				name:      name,
+				processID: processID,
+			})
+			
+			results = append(results, map[string]any{
+				"index":      i,
+				"name":       name,
+				"process_id": processID,
+				"pid":        0,
+				"status":     "pending",
+			})
+		} else {
+			// Process immediately (sync mode or no delay in non-deferred mode)
+			if delay > 0 {
+				// Wait for the delay
+				time.Sleep(delay)
+			}
+			
+			err := executeDelayedProcess(ctx, tracker, envVars)
+			if err != nil {
+				results = append(results, map[string]any{
+					"index":      i,
+					"name":       name,
+					"process_id": processID,
+					"error":      err.Error(),
+				})
+				continue
+			}
+			
+			registry.addProcess(tracker)
+			
+			results = append(results, map[string]any{
+				"index":      i,
+				"name":       name,
+				"process_id": processID,
+				"pid":        tracker.PID,
+				"status":     string(tracker.Status),
+			})
+		}
+	}
+	
+	// If we have deferred processes, start them in a goroutine
+	if len(deferredProcesses) > 0 {
+		go func() {
+			// Process each deferred process with its delay
+			for i, info := range deferredProcesses {
+				// For the first deferred process, use its original delay
+				// For subsequent ones, use their individual delays
+				if i == 0 {
+					// First deferred process - wait for its delay
+					if info.tracker.DelayStart > 0 {
+						time.Sleep(info.tracker.DelayStart)
+					}
+				} else {
+					// Subsequent processes - wait for their individual delays
+					// This is the delay between this process and the previous one
+					if info.tracker.DelayStart > 0 {
+						time.Sleep(info.tracker.DelayStart)
+					}
+				}
+				
+				// Execute the process
+				err := executeDelayedProcess(context.Background(), info.tracker, info.envVars)
+				if err != nil {
+					// Process failed to start - update status
+					info.tracker.Mutex.Lock()
+					info.tracker.Status = StatusFailed
+					info.tracker.Mutex.Unlock()
+				}
+			}
+		}()
+	}
+	
+	resultBytes, _ := json.Marshal(results)
 	return mcp.NewToolResultText(string(resultBytes)), nil
 }
 
@@ -1060,6 +1293,7 @@ func handleListProcesses(ctx context.Context, request mcp.CallToolRequest) (*mcp
 		tracker.Mutex.RLock()
 		processInfo := map[string]any{
 			"id":             tracker.ID,
+			"name":           tracker.Name,
 			"pid":            tracker.PID,
 			"command":        tracker.Command,
 			"args":           tracker.Args,
@@ -1142,6 +1376,7 @@ func handleGetProcessStatus(ctx context.Context, request mcp.CallToolRequest) (*
 
 	result := map[string]any{
 		"id":             tracker.ID,
+		"name":           tracker.Name,
 		"pid":            tracker.PID,
 		"command":        tracker.Command,
 		"args":           tracker.Args,

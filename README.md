@@ -7,13 +7,15 @@ A Golang daemon that provides an MCP (Model Context Protocol) server for audio n
 - MCP server using [mark3labs/mcp-go](https://github.com/mark3labs/mcp-go)
 - **Audio Notifications**: System sound and text-to-speech (macOS only)
 - **Process Management**: Spawn, monitor, and manage long-running processes with ring buffer output tracking and stdin input
+- **Process Naming**: Optional human-readable names for easy process identification
+- **Batch Spawning**: Launch multiple processes with individual configurations and delays
 - **Real-time Output**: "tail -f" like functionality with configurable 10MB ring buffers
 - **Automatic Cleanup**: Background cleanup of inactive processes (1-hour timeout)
 - **Thread-safe**: Concurrent process management with proper synchronization
 
 ## 🛠️ Installation & Usage
 
-This daemon exposes 8 MCP tools: 1 for audio notifications and 7 for process management.
+This daemon exposes 9 MCP tools: 1 for audio notifications and 8 for process management.
 
 ### 📦 Quick Installation
 
@@ -107,6 +109,7 @@ Spawn a new process and start tracking its output with configurable ring buffer 
 |---------------|---------|----------|---------------------------------------|
 | command       | string  |   ✅     | Command to execute                    |
 | args          | array   |   ❌     | Command arguments                     |
+| name          | string  |   ❌     | Optional human-readable name for the process (non-unique) |
 | working_dir   | string  |   ❌     | Working directory                     |
 | env           | object  |   ❌     | Environment variables                 |
 | buffer_size   | number  |   ❌     | Ring buffer size in bytes (default: 10MB) |
@@ -137,6 +140,93 @@ Spawn a new process and start tracking its output with configurable ring buffer 
   }
 }
 ```
+
+```json
+{
+  "tool": "spawn_process",
+  "args": {
+    "command": "npm",
+    "args": ["run", "dev"],
+    "name": "frontend-server",
+    "working_dir": "/path/to/frontend"
+  }
+}
+```
+
+#### `spawn_multiple_processes`
+Spawn multiple processes sequentially with individual configurations and delays.
+
+| Argument   | Type    | Required | Description                                |
+|------------|---------|----------|--------------------------------------------|
+| processes  | array   |   ✅     | Array of process configurations to spawn  |
+
+Each process configuration supports all parameters from `spawn_process`:
+- `command` (required), `args`, `name`, `working_dir`, `env`, `buffer_size`, `delay`, `sync_delay`
+
+**Important**: Delays are sequential - each process's delay is applied after the previous process has been scheduled, ensuring proper timing between launches.
+
+**Example:**
+```json
+{
+  "tool": "spawn_multiple_processes",
+  "args": {
+    "processes": [
+      {
+        "command": "redis-server",
+        "name": "cache",
+        "delay": 0
+      },
+      {
+        "command": "python",
+        "args": ["manage.py", "runserver"],
+        "name": "backend-api",
+        "working_dir": "/path/to/backend",
+        "delay": 2000,
+        "sync_delay": true
+      },
+      {
+        "command": "npm",
+        "args": ["start"],
+        "name": "frontend-server",
+        "working_dir": "/path/to/frontend",
+        "delay": 3000,
+        "sync_delay": false
+      }
+    ]
+  }
+}
+```
+
+Returns an array with the status of each process:
+```json
+[
+  {"index": 0, "name": "cache", "process_id": "abc123", "pid": 12345, "status": "running"},
+  {"index": 1, "name": "backend-api", "process_id": "def456", "pid": 12346, "status": "running"},
+  {"index": 2, "name": "frontend-server", "process_id": "ghi789", "pid": 0, "status": "pending"}
+]
+```
+
+**Timing behavior:**
+- With the example above, the total execution time would be ~5 seconds:
+  - t=0s: redis-server starts immediately (delay=0)
+  - t=2s: backend-api starts (2s delay from previous)
+  - t=5s: frontend-server scheduled (3s delay from previous)
+- `sync_delay` controls whether to wait for process startup:
+  - `true`: Wait for process to be running before continuing
+  - `false`: Schedule process and continue immediately
+
+**Async mode behavior (`sync_delay: false`):**
+- The tool returns immediately after processing initial no-delay processes
+- Processes with delay=0 at the start are launched immediately and show status "running"
+- The first process with delay>0 and all subsequent processes show status "pending"
+- All pending processes are scheduled in a background goroutine with proper sequential delays
+
+Example: If you have [delay=0, delay=0, delay=2000, delay=0, delay=1000], the response will show:
+- Process 0: "running" (started immediately)
+- Process 1: "running" (started immediately)
+- Process 2: "pending" (will start at t=2s)
+- Process 3: "pending" (will start at t=2s, after process 2)
+- Process 4: "pending" (will start at t=3s, 1s after process 3)
 
 #### `get_partial_process_output`
 Get incremental output from a process since last read (tail -f functionality) with optional smart delay.
@@ -287,6 +377,7 @@ Get detailed status information about a process.
 - **Color-free Output**: Spawned processes have `NO_COLOR=1` and `TERM=dumb` environment variables set
 - **Process Status Tracking**: Real-time monitoring of running, completed, failed, and killed processes
 - **UUID Process IDs**: Each spawned process gets a unique identifier for tracking
+- **Process Names**: Optional non-unique human-readable names for easy reference
 - **Smart Delay System**: Process spawning supports sync/async delays (max 5 minutes), output tools support delays with early termination (max 2 minutes)
 - **Pending Status**: Async delayed processes show "pending" status until delay completes and execution begins
 - **Graceful Shutdown**: On termination, sidekick sends SIGTERM to all child process groups, waits up to 5 seconds for graceful shutdown, then sends SIGKILL to any remaining process groups

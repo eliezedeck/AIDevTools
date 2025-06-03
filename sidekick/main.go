@@ -61,6 +61,9 @@ func main() {
 		mcp.WithBoolean("sync_delay",
 			mcp.Description("Whether delay blocks caller (true) or returns immediately (false, default)"),
 		),
+		mcp.WithString("name",
+			mcp.Description("Optional human-readable name for the process (non-unique)"),
+		),
 	)
 
 	getPartialProcessOutputTool := mcp.NewTool(
@@ -143,8 +146,18 @@ func main() {
 		),
 	)
 
+	spawnMultipleProcessesTool := mcp.NewTool(
+		"spawn_multiple_processes",
+		mcp.WithDescription("Spawn multiple processes with individual delays and configurations"),
+		mcp.WithArray("processes",
+			mcp.Required(),
+			mcp.Description("Array of process configurations to spawn"),
+		),
+	)
+
 	// 🔗 Register process management tools
 	s.AddTool(spawnProcessTool, handleSpawnProcess)
+	s.AddTool(spawnMultipleProcessesTool, handleSpawnMultipleProcesses)
 	s.AddTool(getPartialProcessOutputTool, handleGetPartialProcessOutput)
 	s.AddTool(getFullProcessOutputTool, handleGetFullProcessOutput)
 	s.AddTool(sendProcessInputTool, handleSendProcessInput)
