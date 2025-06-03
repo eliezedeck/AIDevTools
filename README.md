@@ -289,6 +289,8 @@ Get detailed status information about a process.
 - **UUID Process IDs**: Each spawned process gets a unique identifier for tracking
 - **Smart Delay System**: Process spawning supports sync/async delays (max 5 minutes), output tools support delays with early termination (max 2 minutes)
 - **Pending Status**: Async delayed processes show "pending" status until delay completes and execution begins
+- **Graceful Shutdown**: On termination, sidekick sends SIGTERM to all child process groups, waits up to 5 seconds for graceful shutdown, then sends SIGKILL to any remaining process groups
+- **Process Group Management**: Each spawned process runs in its own process group, ensuring all child processes and descendants are properly cleaned up on termination
 
 ## 📝 Notes
 - macOS only (uses `afplay` and `say` for notifications)

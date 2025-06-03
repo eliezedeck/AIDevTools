@@ -316,6 +316,11 @@ func executeDelayedProcess(ctx context.Context, tracker *ProcessTracker, envVars
 	if tracker.WorkingDir != "" {
 		cmd.Dir = tracker.WorkingDir
 	}
+	
+	// Put process in its own process group for proper cleanup
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Setpgid: true,
+	}
 
 	env := os.Environ()
 	env = append(env, "NO_COLOR=1", "TERM=dumb")
@@ -1102,9 +1107,11 @@ func handleKillProcess(ctx context.Context, request mcp.CallToolRequest) (*mcp.C
 			tracker.StdinWriter.Close()
 		}
 
-		err := tracker.Process.Process.Signal(syscall.SIGTERM)
+		// Kill the entire process group
+		err := syscall.Kill(-tracker.Process.Process.Pid, syscall.SIGTERM)
 		if err != nil {
-			tracker.Process.Process.Kill()
+			// If SIGTERM fails, force kill the process group
+			syscall.Kill(-tracker.Process.Process.Pid, syscall.SIGKILL)
 		}
 		tracker.Status = StatusKilled
 	}

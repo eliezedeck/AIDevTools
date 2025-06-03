@@ -2,6 +2,10 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -148,8 +152,74 @@ func main() {
 	s.AddTool(killProcessTool, handleKillProcess)
 	s.AddTool(getProcessStatusTool, handleGetProcessStatus)
 
+	// 🚦 Setup signal handling for graceful shutdown
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	
+	// Handle signals in a goroutine
+	go func() {
+		<-sigChan
+		handleGracefulShutdown()
+		os.Exit(0)
+	}()
+
 	// 🚦 Start the MCP server over stdio
 	if err := server.ServeStdio(s); err != nil {
 		fmt.Printf("Server error: %v\n", err)
+	}
+}
+
+// handleGracefulShutdown sends SIGTERM to all running processes, waits up to 5 seconds,
+// then sends SIGKILL to any remaining processes
+func handleGracefulShutdown() {
+	// Get all tracked processes
+	processes := registry.getAllProcesses()
+	
+	// Send SIGTERM to all running process groups
+	for _, tracker := range processes {
+		tracker.Mutex.RLock()
+		if tracker.Process != nil && tracker.Process.Process != nil && 
+		   (tracker.Status == StatusRunning || tracker.Status == StatusPending) {
+			// Kill the entire process group by sending signal to -pid
+			_ = syscall.Kill(-tracker.Process.Process.Pid, syscall.SIGTERM)
+		}
+		tracker.Mutex.RUnlock()
+	}
+	
+	// Give processes up to 5 seconds to terminate gracefully
+	deadline := time.Now().Add(5 * time.Second)
+	checkInterval := 100 * time.Millisecond
+	
+	for time.Now().Before(deadline) {
+		allTerminated := true
+		
+		for _, tracker := range processes {
+			tracker.Mutex.RLock()
+			if tracker.Status == StatusRunning || tracker.Status == StatusPending {
+				allTerminated = false
+			}
+			tracker.Mutex.RUnlock()
+			
+			if !allTerminated {
+				break
+			}
+		}
+		
+		if allTerminated {
+			return
+		}
+		
+		time.Sleep(checkInterval)
+	}
+	
+	// Force kill any remaining process groups
+	for _, tracker := range processes {
+		tracker.Mutex.RLock()
+		if tracker.Process != nil && tracker.Process.Process != nil &&
+		   (tracker.Status == StatusRunning || tracker.Status == StatusPending) {
+			// Kill the entire process group with SIGKILL
+			_ = syscall.Kill(-tracker.Process.Process.Pid, syscall.SIGKILL)
+		}
+		tracker.Mutex.RUnlock()
 	}
 }
