@@ -676,6 +676,7 @@ func handleGetPartialProcessOutput(ctx context.Context, request mcp.CallToolRequ
 		defer ticker.Stop()
 		
 		remaining := delay
+	delayLoop:
 		for remaining > 0 {
 			select {
 			case <-ticker.C:
@@ -685,8 +686,8 @@ func handleGetPartialProcessOutput(ctx context.Context, request mcp.CallToolRequ
 				tracker.Mutex.RUnlock()
 				
 				if status != StatusRunning && status != StatusPending {
-					// Process terminated, return immediately
-					break
+					// Process terminated, exit delay loop
+					break delayLoop
 				}
 				remaining -= time.Duration(DelayCheckInterval) * time.Millisecond
 				
@@ -868,6 +869,7 @@ func handleGetFullProcessOutput(ctx context.Context, request mcp.CallToolRequest
 		defer ticker.Stop()
 		
 		remaining := delay
+	delayLoop:
 		for remaining > 0 {
 			select {
 			case <-ticker.C:
@@ -877,8 +879,8 @@ func handleGetFullProcessOutput(ctx context.Context, request mcp.CallToolRequest
 				tracker.Mutex.RUnlock()
 				
 				if status != StatusRunning && status != StatusPending {
-					// Process terminated, return immediately
-					break
+					// Process terminated, exit delay loop
+					break delayLoop
 				}
 				remaining -= time.Duration(DelayCheckInterval) * time.Millisecond
 				
