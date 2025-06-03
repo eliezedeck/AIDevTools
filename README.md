@@ -11,25 +11,44 @@ A Golang daemon that provides an MCP (Model Context Protocol) server for audio n
 - **Automatic Cleanup**: Background cleanup of inactive processes (1-hour timeout)
 - **Thread-safe**: Concurrent process management with proper synchronization
 
-## 🛠️ Usage
+## 🛠️ Installation & Usage
 
 This daemon exposes 6 MCP tools: 1 for audio notifications and 5 for process management.
 
-### 🧩 Claude Code Integration (Official CLI Method)
+### 📦 Quick Installation
 
-1. **Add the server to Claude Code using the CLI:**
+1. **Install the sidekick binary:**
    - From the project root directory, run:
 
      ```bash
-     claude mcp add sidekick go run "$(pwd)/sidekick/main.go" "$(pwd)/sidekick/processes.go" "$(pwd)/sidekick/notifications.go"
+     ./install.sh
      ```
-     - `$(pwd)` automatically uses your current directory path
-     - `sidekick` is the name for this server in Claude Code
+     
+     This will:
+     - Build the sidekick binary from all Go source files
+     - Install it to `~/.local/bin/sidekick`
+     - Ask for confirmation before overwriting existing installations
+     - Provide PATH setup instructions if needed
+
+### 🧩 Claude Code Integration
+
+2. **Add the server to Claude Code:**
+   - After installation, run:
+
+     ```bash
+     claude mcp add sidekick ~/.local/bin/sidekick
+     ```
+     
+   - Or if `~/.local/bin` is in your PATH:
+
+     ```bash
+     claude mcp add sidekick sidekick
+     ```
 
    - To add with environment variables:
 
      ```bash
-     claude mcp add sidekick -e KEY=value go run "$(pwd)/sidekick/main.go" "$(pwd)/sidekick/processes.go" "$(pwd)/sidekick/notifications.go"
+     claude mcp add sidekick -e KEY=value ~/.local/bin/sidekick
      ```
 
 3. **Verify the server is added:**
@@ -48,6 +67,7 @@ This daemon exposes 6 MCP tools: 1 for audio notifications and 5 for process man
 
 #### 📝 Tips & Notes
 - No need to edit any JSON config files manually. The CLI handles everything.
+- The binary approach is more efficient than `go run` and handles multiple source files automatically.
 - The server will be started by Claude Code as a subprocess using stdio transport.
 - Remove the server with:
   ```bash
@@ -200,6 +220,15 @@ Get detailed status information about a process.
 - `sidekick/main.go` - MCP server setup and tool registration
 - `sidekick/notifications.go` - Audio notification functionality
 - `sidekick/processes.go` - Process management and output tracking
+- `install.sh` - Installation script that builds and installs the binary
+
+### Building Manually
+If you prefer to build manually instead of using the install script:
+
+```bash
+cd sidekick
+go build -o sidekick main.go processes.go notifications.go
+```
 
 ## 📚 References
 - [MCP Protocol Spec](https://modelcontextprotocol.io/)
