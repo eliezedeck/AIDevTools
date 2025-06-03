@@ -51,10 +51,20 @@ if [ -f "$INSTALL_PATH" ]; then
     esac
 fi
 
-# Build the binary
-echo "🔨 Building sidekick binary..."
+# Download dependencies and build the binary
+echo "📦 Downloading Go dependencies..."
 cd "$SIDEKICK_DIR"
 
+# Download and verify dependencies
+go mod download
+if [ $? -ne 0 ]; then
+    echo "❌ Failed to download dependencies!"
+    exit 1
+fi
+
+echo "✅ Dependencies downloaded successfully!"
+
+echo "🔨 Building sidekick binary..."
 # Build with all Go files
 go build -o "$INSTALL_PATH" main.go processes.go notifications.go
 
