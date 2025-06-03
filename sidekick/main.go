@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
@@ -40,10 +41,11 @@ func handleSpeak(c echo.Context) error {
 	}
 
 	go func() {
-		exec.Command("afplay", "/System/Library/Sounds/Glass.aiff").Run()
+		exec.Command("afplay", "/System/Library/Sounds/Glass.aiff", "-v", "10").Run()
 	}()
 
 	go func() {
+		time.Sleep(500 * time.Millisecond)
 		exec.Command("say", "-v", "Zoe (Premium)", req.Text).Run()
 	}()
 
