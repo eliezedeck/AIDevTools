@@ -28,7 +28,7 @@ func handleSpeak(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToo
 
 	// 🔊 Play system sound asynchronously
 	go func() {
-		exec.Command("afplay", "/System/Library/Sounds/Glass.aiff", "-v", "10").Run()
+		exec.Command("afplay", "/System/Library/Sounds/Glass.aiff", "-v", "5").Run()
 	}()
 
 	// 🗣️ Speak the text after a short delay
