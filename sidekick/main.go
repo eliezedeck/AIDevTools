@@ -1,53 +1,70 @@
 package main
 
 import (
-	"net/http"
+	"context"
+	"fmt"
 	"os/exec"
 	"strings"
 	"time"
 
-	"github.com/labstack/echo/v4"
-	"github.com/labstack/echo/v4/middleware"
+	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/mark3labs/mcp-go/server"
 )
 
-type SpeakRequest struct {
-	Text string `json:"text"`
+// SpeakParams defines the input for the notifications_speak tool 🚀
+type SpeakParams struct {
+	Text string `json:"text" mcp:"Text to speak (max 50 words)"`
 }
 
 func main() {
-	e := echo.New()
+	// 🛠️ Create a new MCP server
+	s := server.NewMCPServer(
+		"Sidekick Notifications",
+		"1.0.0",
+		server.WithToolCapabilities(false),
+	)
 
-	e.Use(middleware.Logger())
-	e.Use(middleware.Recover())
+	// 🗣️ Define the notifications_speak tool
+	speakTool := mcp.NewTool(
+		"notifications_speak",
+		mcp.WithDescription("Play a system sound and speak the provided text (max 50 words)"),
+		mcp.WithString("text",
+			mcp.Required(),
+			mcp.Description("Text to speak (max 50 words)"),
+		),
+	)
 
-	e.POST("/notifications/speak", handleSpeak)
+	// 🔗 Register the tool handler
+	s.AddTool(speakTool, handleSpeak)
 
-	e.Logger.Fatal(e.Start(":12345"))
+	// 🚦 Start the MCP server over stdio
+	if err := server.ServeStdio(s); err != nil {
+		fmt.Printf("Server error: %v\n", err)
+	}
 }
 
-func handleSpeak(c echo.Context) error {
-	var req SpeakRequest
-	if err := c.Bind(&req); err != nil {
-		return c.String(http.StatusBadRequest, "Invalid JSON")
+// handleSpeak executes the notifications_speak tool logic 🎤
+func handleSpeak(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	text, err := request.RequireString("text")
+	if err != nil {
+		return mcp.NewToolResultError("Missing or invalid 'text' argument"), nil
 	}
 
-	if req.Text == "" {
-		return c.String(http.StatusBadRequest, "Text is required")
-	}
-
-	words := strings.Fields(req.Text)
+	words := strings.Fields(text)
 	if len(words) > 50 {
-		return c.String(http.StatusBadRequest, "Text must be 50 words or less")
+		return mcp.NewToolResultError("Text must be 50 words or less"), nil
 	}
 
+	// 🔊 Play system sound asynchronously
 	go func() {
 		exec.Command("afplay", "/System/Library/Sounds/Glass.aiff", "-v", "10").Run()
 	}()
 
+	// 🗣️ Speak the text after a short delay
 	go func() {
 		time.Sleep(500 * time.Millisecond)
-		exec.Command("say", "-v", "Zoe (Premium)", req.Text).Run()
+		exec.Command("say", "-v", "Zoe (Premium)", text).Run()
 	}()
 
-	return c.NoContent(http.StatusOK)
+	return mcp.NewToolResultText("Notification spoken!"), nil
 }
