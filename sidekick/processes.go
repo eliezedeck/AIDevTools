@@ -27,33 +27,34 @@ const (
 )
 
 type ProcessTracker struct {
-	ID            string          `json:"id"`
-	PID           int             `json:"pid"`
-	Command       string          `json:"command"`
-	Args          []string        `json:"args"`
-	WorkingDir    string          `json:"working_dir"`
-	BufferSize    int64           `json:"buffer_size"`
-	StartTime     time.Time       `json:"start_time"`
-	LastAccessed  time.Time       `json:"last_accessed"`
-	Status        ProcessStatus   `json:"status"`
-	StdoutCursor  int64           `json:"stdout_cursor"`
-	StderrCursor  int64           `json:"stderr_cursor"`
-	StdoutBuffer  *RingBuffer     `json:"-"`
-	StderrBuffer  *RingBuffer     `json:"-"`
-	Process       *exec.Cmd       `json:"-"`
-	StdinWriter   io.WriteCloser  `json:"-"`
-	ExitCode      *int            `json:"exit_code,omitempty"`
-	Mutex         sync.RWMutex    `json:"-"`
+	ID            string         `json:"id"`
+	PID           int            `json:"pid"`
+	Command       string         `json:"command"`
+	Args          []string       `json:"args"`
+	WorkingDir    string         `json:"working_dir"`
+	BufferSize    int64          `json:"buffer_size"`
+	CombineOutput bool           `json:"combine_output"`
+	StartTime     time.Time      `json:"start_time"`
+	LastAccessed  time.Time      `json:"last_accessed"`
+	Status        ProcessStatus  `json:"status"`
+	StdoutCursor  int64          `json:"stdout_cursor"`
+	StderrCursor  int64          `json:"stderr_cursor"`
+	StdoutBuffer  *RingBuffer    `json:"-"`
+	StderrBuffer  *RingBuffer    `json:"-"`
+	Process       *exec.Cmd      `json:"-"`
+	StdinWriter   io.WriteCloser `json:"-"`
+	ExitCode      *int           `json:"exit_code,omitempty"`
+	Mutex         sync.RWMutex   `json:"-"`
 }
 
 type OutputResponse struct {
-	ProcessID     string          `json:"process_id"`
-	Stdout        string          `json:"stdout,omitempty"`
-	Stderr        string          `json:"stderr,omitempty"`
-	StdoutCursor  int64           `json:"stdout_cursor"`
-	StderrCursor  int64           `json:"stderr_cursor"`
-	Status        ProcessStatus   `json:"status"`
-	ExitCode      *int            `json:"exit_code,omitempty"`
+	ProcessID    string        `json:"process_id"`
+	Stdout       string        `json:"stdout,omitempty"`
+	Stderr       string        `json:"stderr,omitempty"`
+	StdoutCursor int64         `json:"stdout_cursor"`
+	StderrCursor int64         `json:"stderr_cursor"`
+	Status       ProcessStatus `json:"status"`
+	ExitCode     *int          `json:"exit_code,omitempty"`
 }
 
 type ProcessRegistry struct {
@@ -66,10 +67,10 @@ const (
 )
 
 type RingBuffer struct {
-	data        []byte
-	maxSize     int64
-	totalBytes  int64
-	mutex       sync.RWMutex
+	data       []byte
+	maxSize    int64
+	totalBytes int64
+	mutex      sync.RWMutex
 }
 
 func NewRingBuffer(maxSize int64) *RingBuffer {
@@ -82,10 +83,10 @@ func NewRingBuffer(maxSize int64) *RingBuffer {
 func (rb *RingBuffer) Write(data []byte) {
 	rb.mutex.Lock()
 	defer rb.mutex.Unlock()
-	
+
 	rb.data = append(rb.data, data...)
 	rb.totalBytes += int64(len(data))
-	
+
 	// Trim from beginning if we exceed max size
 	if int64(len(rb.data)) > rb.maxSize {
 		excess := int64(len(rb.data)) - rb.maxSize
@@ -102,18 +103,18 @@ func (rb *RingBuffer) GetContent() string {
 func (rb *RingBuffer) GetContentFromCursor(cursor int64) string {
 	rb.mutex.RLock()
 	defer rb.mutex.RUnlock()
-	
+
 	// Calculate effective position in current buffer
 	discardedBytes := rb.totalBytes - int64(len(rb.data))
 	effectivePos := cursor - discardedBytes
-	
+
 	if effectivePos < 0 {
 		effectivePos = 0
 	}
 	if effectivePos >= int64(len(rb.data)) {
 		return ""
 	}
-	
+
 	return string(rb.data[effectivePos:])
 }
 
@@ -127,6 +128,73 @@ func (rb *RingBuffer) TotalBytes() int64 {
 	rb.mutex.RLock()
 	defer rb.mutex.RUnlock()
 	return rb.totalBytes
+}
+
+// Whitelist of allowed filter commands for security
+var allowedCommands = map[string]bool{
+	"grep":   true,
+	"awk":    true,
+	"sed":    true,
+	"head":   true,
+	"tail":   true,
+	"cut":    true,
+	"sort":   true,
+	"uniq":   true,
+	"wc":     true,
+	"tr":     true,
+	"column": true,
+	"jq":     true,
+	"cat":    true,
+	"tee":    true,
+}
+
+// Filter timeout - prevent hanging commands
+const filterTimeout = 10 * time.Second
+
+// filterOutput applies a pipeline of commands to filter the input
+func filterOutput(input string, commands [][]string) (string, error) {
+	if len(commands) == 0 {
+		return input, nil
+	}
+
+	// Validate all commands first
+	for i, cmdArray := range commands {
+		if len(cmdArray) == 0 {
+			return "", fmt.Errorf("command %d is empty", i)
+		}
+
+		program := cmdArray[0]
+		if !allowedCommands[program] {
+			return "", fmt.Errorf("command not allowed: %s", program)
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), filterTimeout)
+	defer cancel()
+
+	currentInput := input
+
+	// Apply each command in the pipeline
+	for i, cmdArray := range commands {
+		program := cmdArray[0]
+		args := cmdArray[1:]
+
+		cmd := exec.CommandContext(ctx, program, args...)
+		cmd.Stdin = strings.NewReader(currentInput)
+
+		output, err := cmd.Output()
+		if err != nil {
+			// If a command fails, return what we have so far with a warning
+			if ctx.Err() == context.DeadlineExceeded {
+				return currentInput, fmt.Errorf("filter command %d (%s) timed out", i, program)
+			}
+			return currentInput, fmt.Errorf("filter command %d (%s) failed: %v", i, program, err)
+		}
+
+		currentInput = string(output)
+	}
+
+	return currentInput, nil
 }
 
 var (
@@ -197,14 +265,14 @@ func (r *ProcessRegistry) getAllProcesses() []*ProcessTracker {
 
 	processes := make([]*ProcessTracker, 0, len(r.processes))
 	now := time.Now()
-	
+
 	for _, tracker := range r.processes {
 		tracker.Mutex.Lock()
 		tracker.LastAccessed = now
 		tracker.Mutex.Unlock()
 		processes = append(processes, tracker)
 	}
-	
+
 	return processes
 }
 
@@ -264,18 +332,32 @@ func handleSpawnProcess(ctx context.Context, request mcp.CallToolRequest) (*mcp.
 		}
 	}
 
+	combineOutput := false
+	if arguments, ok := request.Params.Arguments.(map[string]any); ok {
+		if co, exists := arguments["combine_output"]; exists {
+			if coBool, ok := co.(bool); ok {
+				combineOutput = coBool
+			}
+		}
+	}
+
 	processID := uuid.New().String()
 	tracker := &ProcessTracker{
-		ID:           processID,
-		Command:      command,
-		Args:         args,
-		WorkingDir:   workingDir,
-		BufferSize:   bufferSize,
-		StartTime:    time.Now(),
-		LastAccessed: time.Now(),
-		Status:       StatusRunning,
-		StdoutBuffer: NewRingBuffer(bufferSize),
-		StderrBuffer: NewRingBuffer(bufferSize),
+		ID:            processID,
+		Command:       command,
+		Args:          args,
+		WorkingDir:    workingDir,
+		BufferSize:    bufferSize,
+		CombineOutput: combineOutput,
+		StartTime:     time.Now(),
+		LastAccessed:  time.Now(),
+		Status:        StatusRunning,
+		StdoutBuffer:  NewRingBuffer(bufferSize),
+	}
+
+	// Only create stderr buffer if not combining output
+	if !combineOutput {
+		tracker.StderrBuffer = NewRingBuffer(bufferSize)
 	}
 
 	cmd := exec.CommandContext(ctx, command, args...)
@@ -290,37 +372,63 @@ func handleSpawnProcess(ctx context.Context, request mcp.CallToolRequest) (*mcp.
 	}
 	cmd.Env = env
 
-	stdoutPipe, err := cmd.StdoutPipe()
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("Failed to create stdout pipe: %v", err)), nil
-	}
-
-	stderrPipe, err := cmd.StderrPipe()
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("Failed to create stderr pipe: %v", err)), nil
-	}
-
 	stdinPipe, err := cmd.StdinPipe()
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("Failed to create stdin pipe: %v", err)), nil
 	}
 
-	if err := cmd.Start(); err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("Failed to start process: %v", err)), nil
+	if combineOutput {
+		// When combining output, redirect both stdout and stderr to the same buffer
+		stdoutPipe, err := cmd.StdoutPipe()
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("Failed to create stdout pipe: %v", err)), nil
+		}
+
+		stderrPipe, err := cmd.StderrPipe()
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("Failed to create stderr pipe: %v", err)), nil
+		}
+
+		if err := cmd.Start(); err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("Failed to start process: %v", err)), nil
+		}
+
+		tracker.Process = cmd
+		tracker.PID = cmd.Process.Pid
+		tracker.StdinWriter = stdinPipe
+
+		// Stream both stdout and stderr to the same buffer (chronological order preserved)
+		go streamToRingBuffer(stdoutPipe, tracker.StdoutBuffer)
+		go streamToRingBuffer(stderrPipe, tracker.StdoutBuffer)
+	} else {
+		// Separate output streams
+		stdoutPipe, err := cmd.StdoutPipe()
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("Failed to create stdout pipe: %v", err)), nil
+		}
+
+		stderrPipe, err := cmd.StderrPipe()
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("Failed to create stderr pipe: %v", err)), nil
+		}
+
+		if err := cmd.Start(); err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("Failed to start process: %v", err)), nil
+		}
+
+		tracker.Process = cmd
+		tracker.PID = cmd.Process.Pid
+		tracker.StdinWriter = stdinPipe
+
+		go streamToRingBuffer(stdoutPipe, tracker.StdoutBuffer)
+		go streamToRingBuffer(stderrPipe, tracker.StderrBuffer)
 	}
-
-	tracker.Process = cmd
-	tracker.PID = cmd.Process.Pid
-	tracker.StdinWriter = stdinPipe
-
-	go streamToRingBuffer(stdoutPipe, tracker.StdoutBuffer)
-	go streamToRingBuffer(stderrPipe, tracker.StderrBuffer)
 
 	go func() {
 		err := cmd.Wait()
 		tracker.Mutex.Lock()
 		defer tracker.Mutex.Unlock()
-		
+
 		if err != nil {
 			if exitError, ok := err.(*exec.ExitError); ok {
 				exitCode := exitError.ExitCode()
@@ -354,7 +462,7 @@ func handleSpawnProcess(ctx context.Context, request mcp.CallToolRequest) (*mcp.
 
 func streamToRingBuffer(reader io.ReadCloser, buffer *RingBuffer) {
 	defer reader.Close()
-	
+
 	scanner := bufio.NewScanner(reader)
 	for scanner.Scan() {
 		line := scanner.Text() + "\n"
@@ -386,6 +494,28 @@ func handleGetPartialProcessOutput(ctx context.Context, request mcp.CallToolRequ
 		}
 	}
 
+	// Parse filters parameter
+	var filters [][]string
+	if arguments, ok := request.Params.Arguments.(map[string]any); ok {
+		if f, exists := arguments["filters"]; exists {
+			if filtersArray, ok := f.([]any); ok {
+				for _, filterInterface := range filtersArray {
+					if filterCmd, ok := filterInterface.([]any); ok {
+						var cmd []string
+						for _, arg := range filterCmd {
+							if argStr, ok := arg.(string); ok {
+								cmd = append(cmd, argStr)
+							}
+						}
+						if len(cmd) > 0 {
+							filters = append(filters, cmd)
+						}
+					}
+				}
+			}
+		}
+	}
+
 	tracker, exists := registry.getProcess(processID)
 	if !exists {
 		return mcp.NewToolResultError(fmt.Sprintf("Process %s not found", processID)), nil
@@ -402,18 +532,70 @@ func handleGetPartialProcessOutput(ctx context.Context, request mcp.CallToolRequ
 		ExitCode:     tracker.ExitCode,
 	}
 
-	if streams == "stdout" || streams == "both" {
+	if tracker.CombineOutput {
+		// When output is combined, everything is in StdoutBuffer
+		if streams == "stderr" {
+			// Special case: user wants stderr but output is combined
+			return mcp.NewToolResultError("Process has combined output - stderr not available separately. Use 'stdout' or 'both' streams."), nil
+		}
+
+		// Get combined output from StdoutBuffer
 		stdout := extractNewContentFromRingBuffer(tracker.StdoutBuffer, tracker.StdoutCursor, maxLines)
-		response.Stdout = stdout
+
+		// Apply filters if provided
+		if len(filters) > 0 {
+			filteredOutput, filterErr := filterOutput(stdout, filters)
+			if filterErr != nil {
+				// Return warning but still include original output
+				response.Stdout = fmt.Sprintf("FILTER WARNING: %v\n\n%s", filterErr, stdout)
+			} else {
+				response.Stdout = filteredOutput
+			}
+		} else {
+			response.Stdout = stdout
+		}
+
 		response.StdoutCursor = tracker.StdoutBuffer.TotalBytes()
 		tracker.StdoutCursor = response.StdoutCursor
-	}
+	} else {
+		// Separate output streams (original behavior)
+		if streams == "stdout" || streams == "both" {
+			stdout := extractNewContentFromRingBuffer(tracker.StdoutBuffer, tracker.StdoutCursor, maxLines)
 
-	if streams == "stderr" || streams == "both" {
-		stderr := extractNewContentFromRingBuffer(tracker.StderrBuffer, tracker.StderrCursor, maxLines)
-		response.Stderr = stderr
-		response.StderrCursor = tracker.StderrBuffer.TotalBytes()
-		tracker.StderrCursor = response.StderrCursor
+			// Apply filters to stdout if provided
+			if len(filters) > 0 {
+				filteredOutput, filterErr := filterOutput(stdout, filters)
+				if filterErr != nil {
+					response.Stdout = fmt.Sprintf("FILTER WARNING: %v\n\n%s", filterErr, stdout)
+				} else {
+					response.Stdout = filteredOutput
+				}
+			} else {
+				response.Stdout = stdout
+			}
+
+			response.StdoutCursor = tracker.StdoutBuffer.TotalBytes()
+			tracker.StdoutCursor = response.StdoutCursor
+		}
+
+		if streams == "stderr" || streams == "both" {
+			stderr := extractNewContentFromRingBuffer(tracker.StderrBuffer, tracker.StderrCursor, maxLines)
+
+			// Apply filters to stderr if provided
+			if len(filters) > 0 {
+				filteredOutput, filterErr := filterOutput(stderr, filters)
+				if filterErr != nil {
+					response.Stderr = fmt.Sprintf("FILTER WARNING: %v\n\n%s", filterErr, stderr)
+				} else {
+					response.Stderr = filteredOutput
+				}
+			} else {
+				response.Stderr = stderr
+			}
+
+			response.StderrCursor = tracker.StderrBuffer.TotalBytes()
+			tracker.StderrCursor = response.StderrCursor
+		}
 	}
 
 	resultBytes, _ := json.Marshal(response)
@@ -460,6 +642,28 @@ func handleGetFullProcessOutput(ctx context.Context, request mcp.CallToolRequest
 		}
 	}
 
+	// Parse filters parameter
+	var filters [][]string
+	if arguments, ok := request.Params.Arguments.(map[string]any); ok {
+		if f, exists := arguments["filters"]; exists {
+			if filtersArray, ok := f.([]any); ok {
+				for _, filterInterface := range filtersArray {
+					if filterCmd, ok := filterInterface.([]any); ok {
+						var cmd []string
+						for _, arg := range filterCmd {
+							if argStr, ok := arg.(string); ok {
+								cmd = append(cmd, argStr)
+							}
+						}
+						if len(cmd) > 0 {
+							filters = append(filters, cmd)
+						}
+					}
+				}
+			}
+		}
+	}
+
 	tracker, exists := registry.getProcess(processID)
 	if !exists {
 		return mcp.NewToolResultError(fmt.Sprintf("Process %s not found", processID)), nil
@@ -468,15 +672,34 @@ func handleGetFullProcessOutput(ctx context.Context, request mcp.CallToolRequest
 	tracker.Mutex.Lock()
 	defer tracker.Mutex.Unlock()
 
+	// Handle cursor values properly for combined vs separate output
+	var stdoutCursor, stderrCursor int64
+	if tracker.CombineOutput {
+		stdoutCursor = tracker.StdoutBuffer.TotalBytes()
+		stderrCursor = 0 // Not used when combined
+	} else {
+		stdoutCursor = tracker.StdoutBuffer.TotalBytes()
+		if tracker.StderrBuffer != nil {
+			stderrCursor = tracker.StderrBuffer.TotalBytes()
+		}
+	}
+
 	response := &OutputResponse{
 		ProcessID:    processID,
-		StdoutCursor: tracker.StdoutBuffer.TotalBytes(),
-		StderrCursor: tracker.StderrBuffer.TotalBytes(),
+		StdoutCursor: stdoutCursor,
+		StderrCursor: stderrCursor,
 		Status:       tracker.Status,
 		ExitCode:     tracker.ExitCode,
 	}
 
-	if streams == "stdout" || streams == "both" {
+	if tracker.CombineOutput {
+		// When output is combined, everything is in StdoutBuffer
+		if streams == "stderr" {
+			// Special case: user wants stderr but output is combined
+			return mcp.NewToolResultError("Process has combined output - stderr not available separately. Use 'stdout' or 'both' streams."), nil
+		}
+
+		// Get combined output from StdoutBuffer
 		fullStdout := tracker.StdoutBuffer.GetContent()
 		if maxLines > 0 && fullStdout != "" {
 			lines := strings.Split(fullStdout, "\n")
@@ -488,22 +711,72 @@ func handleGetFullProcessOutput(ctx context.Context, request mcp.CallToolRequest
 				}
 			}
 		}
-		response.Stdout = fullStdout
-	}
 
-	if streams == "stderr" || streams == "both" {
-		fullStderr := tracker.StderrBuffer.GetContent()
-		if maxLines > 0 && fullStderr != "" {
-			lines := strings.Split(fullStderr, "\n")
-			if len(lines) > maxLines {
-				lines = lines[:maxLines]
-				fullStderr = strings.Join(lines, "\n")
-				if !strings.HasSuffix(fullStderr, "\n") && len(lines) > 0 {
-					fullStderr += "\n"
+		// Apply filters if provided
+		if len(filters) > 0 {
+			filteredOutput, filterErr := filterOutput(fullStdout, filters)
+			if filterErr != nil {
+				// Return warning but still include original output
+				response.Stdout = fmt.Sprintf("FILTER WARNING: %v\n\n%s", filterErr, fullStdout)
+			} else {
+				response.Stdout = filteredOutput
+			}
+		} else {
+			response.Stdout = fullStdout
+		}
+	} else {
+		// Separate output streams (original behavior)
+		if streams == "stdout" || streams == "both" {
+			fullStdout := tracker.StdoutBuffer.GetContent()
+			if maxLines > 0 && fullStdout != "" {
+				lines := strings.Split(fullStdout, "\n")
+				if len(lines) > maxLines {
+					lines = lines[:maxLines]
+					fullStdout = strings.Join(lines, "\n")
+					if !strings.HasSuffix(fullStdout, "\n") && len(lines) > 0 {
+						fullStdout += "\n"
+					}
 				}
 			}
+
+			// Apply filters to stdout if provided
+			if len(filters) > 0 {
+				filteredOutput, filterErr := filterOutput(fullStdout, filters)
+				if filterErr != nil {
+					response.Stdout = fmt.Sprintf("FILTER WARNING: %v\n\n%s", filterErr, fullStdout)
+				} else {
+					response.Stdout = filteredOutput
+				}
+			} else {
+				response.Stdout = fullStdout
+			}
 		}
-		response.Stderr = fullStderr
+
+		if streams == "stderr" || streams == "both" {
+			fullStderr := tracker.StderrBuffer.GetContent()
+			if maxLines > 0 && fullStderr != "" {
+				lines := strings.Split(fullStderr, "\n")
+				if len(lines) > maxLines {
+					lines = lines[:maxLines]
+					fullStderr = strings.Join(lines, "\n")
+					if !strings.HasSuffix(fullStderr, "\n") && len(lines) > 0 {
+						fullStderr += "\n"
+					}
+				}
+			}
+
+			// Apply filters to stderr if provided
+			if len(filters) > 0 {
+				filteredOutput, filterErr := filterOutput(fullStderr, filters)
+				if filterErr != nil {
+					response.Stderr = fmt.Sprintf("FILTER WARNING: %v\n\n%s", filterErr, fullStderr)
+				} else {
+					response.Stderr = filteredOutput
+				}
+			} else {
+				response.Stderr = fullStderr
+			}
+		}
 	}
 
 	resultBytes, _ := json.Marshal(response)
@@ -554,19 +827,21 @@ func handleSendProcessInput(ctx context.Context, request mcp.CallToolRequest) (*
 
 func handleListProcesses(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	processes := registry.getAllProcesses()
-	
+
 	result := make([]map[string]any, 0, len(processes))
 	for _, tracker := range processes {
 		tracker.Mutex.RLock()
 		processInfo := map[string]any{
-			"id":            tracker.ID,
-			"pid":           tracker.PID,
-			"command":       tracker.Command,
-			"args":          tracker.Args,
-			"working_dir":   tracker.WorkingDir,
-			"start_time":    tracker.StartTime.Format(time.RFC3339),
-			"last_accessed": tracker.LastAccessed.Format(time.RFC3339),
-			"status":        string(tracker.Status),
+			"id":             tracker.ID,
+			"pid":            tracker.PID,
+			"command":        tracker.Command,
+			"args":           tracker.Args,
+			"working_dir":    tracker.WorkingDir,
+			"buffer_size":    tracker.BufferSize,
+			"combine_output": tracker.CombineOutput,
+			"start_time":     tracker.StartTime.Format(time.RFC3339),
+			"last_accessed":  tracker.LastAccessed.Format(time.RFC3339),
+			"status":         string(tracker.Status),
 		}
 		if tracker.ExitCode != nil {
 			processInfo["exit_code"] = *tracker.ExitCode
@@ -602,7 +877,7 @@ func handleKillProcess(ctx context.Context, request mcp.CallToolRequest) (*mcp.C
 		if tracker.StdinWriter != nil {
 			tracker.StdinWriter.Close()
 		}
-		
+
 		err := tracker.Process.Process.Signal(syscall.SIGTERM)
 		if err != nil {
 			tracker.Process.Process.Kill()
@@ -635,21 +910,36 @@ func handleGetProcessStatus(ctx context.Context, request mcp.CallToolRequest) (*
 	defer tracker.Mutex.RUnlock()
 
 	result := map[string]any{
-		"id":            tracker.ID,
-		"pid":           tracker.PID,
-		"command":       tracker.Command,
-		"args":          tracker.Args,
-		"working_dir":   tracker.WorkingDir,
-		"buffer_size":   tracker.BufferSize,
-		"start_time":    tracker.StartTime.Format(time.RFC3339),
-		"last_accessed": tracker.LastAccessed.Format(time.RFC3339),
-		"status":        string(tracker.Status),
-		"stdout_cursor": tracker.StdoutCursor,
-		"stderr_cursor": tracker.StderrCursor,
-		"stdout_size":   tracker.StdoutBuffer.Len(),
-		"stderr_size":   tracker.StderrBuffer.Len(),
-		"stdout_total":  tracker.StdoutBuffer.TotalBytes(),
-		"stderr_total":  tracker.StderrBuffer.TotalBytes(),
+		"id":             tracker.ID,
+		"pid":            tracker.PID,
+		"command":        tracker.Command,
+		"args":           tracker.Args,
+		"working_dir":    tracker.WorkingDir,
+		"buffer_size":    tracker.BufferSize,
+		"combine_output": tracker.CombineOutput,
+		"start_time":     tracker.StartTime.Format(time.RFC3339),
+		"last_accessed":  tracker.LastAccessed.Format(time.RFC3339),
+		"status":         string(tracker.Status),
+		"stdout_cursor":  tracker.StdoutCursor,
+		"stderr_cursor":  tracker.StderrCursor,
+		"stdout_size":    tracker.StdoutBuffer.Len(),
+		"stdout_total":   tracker.StdoutBuffer.TotalBytes(),
+	}
+
+	if tracker.CombineOutput {
+		// When output is combined, stderr info is not relevant
+		result["stderr_size"] = 0
+		result["stderr_total"] = 0
+		result["combined_output_note"] = "stdout contains both stdout and stderr (combined)"
+	} else {
+		// Separate streams - include stderr info
+		if tracker.StderrBuffer != nil {
+			result["stderr_size"] = tracker.StderrBuffer.Len()
+			result["stderr_total"] = tracker.StderrBuffer.TotalBytes()
+		} else {
+			result["stderr_size"] = 0
+			result["stderr_total"] = 0
+		}
 	}
 
 	if tracker.ExitCode != nil {

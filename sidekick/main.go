@@ -48,6 +48,9 @@ func main() {
 		mcp.WithNumber("buffer_size",
 			mcp.Description("Ring buffer size in bytes (default: 10MB)"),
 		),
+		mcp.WithBoolean("combine_output",
+			mcp.Description("Whether to combine stdout and stderr into single stream (default: false)"),
+		),
 	)
 
 	getPartialProcessOutputTool := mcp.NewTool(
@@ -64,6 +67,9 @@ func main() {
 		mcp.WithNumber("max_lines",
 			mcp.Description("Maximum lines to return (optional)"),
 		),
+		mcp.WithArray("filters",
+			mcp.Description("Optional command pipeline - each element is [command, ...args]"),
+		),
 	)
 
 	getFullProcessOutputTool := mcp.NewTool(
@@ -79,6 +85,9 @@ func main() {
 		),
 		mcp.WithNumber("max_lines",
 			mcp.Description("Maximum lines to return (optional)"),
+		),
+		mcp.WithArray("filters",
+			mcp.Description("Optional command pipeline - each element is [command, ...args]"),
 		),
 	)
 
