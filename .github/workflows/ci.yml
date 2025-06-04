@@ -108,6 +108,10 @@ jobs:
       with:
         go-version: ${{ env.GO_VERSION }}
 
+    - name: Configure Git Authentication
+      run: |
+        git config --global url."https://${{ secrets.GITHUB_TOKEN }}@github.com/".insteadOf "https://github.com/"
+
     - name: Run Gosec Security Scanner
       run: |
         # Install gosec
