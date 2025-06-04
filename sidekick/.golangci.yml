@@ -80,7 +80,6 @@ linters:
     - typecheck
     - unconvert
     - unused
-    - whitespace
 
 issues:
   exclude-rules:
