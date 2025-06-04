@@ -66,10 +66,10 @@ type ProcessRegistry struct {
 }
 
 const (
-	DefaultBufferSize     = 10 * 1024 * 1024 // 10MB default buffer size
-	MaxOutputDelay        = 120000            // 2 minutes max delay for output tools
-	MaxSpawnDelay         = 300000            // 5 minutes max delay for spawn_process
-	DelayCheckInterval    = 100               // Check process status every 100ms during delay
+	DefaultBufferSize  = 10 * 1024 * 1024 // 10MB default buffer size
+	MaxOutputDelay     = 120000           // 2 minutes max delay for output tools
+	MaxSpawnDelay      = 300000           // 5 minutes max delay for spawn_process
+	DelayCheckInterval = 100              // Check process status every 100ms during delay
 )
 
 type RingBuffer struct {
@@ -316,7 +316,7 @@ func executeDelayedProcess(ctx context.Context, tracker *ProcessTracker, envVars
 	if tracker.WorkingDir != "" {
 		cmd.Dir = tracker.WorkingDir
 	}
-	
+
 	// Configure process group for proper cleanup
 	configureProcessGroup(cmd)
 
@@ -344,7 +344,7 @@ func executeDelayedProcess(ctx context.Context, tracker *ProcessTracker, envVars
 			tracker.Mutex.Unlock()
 			return fmt.Errorf("failed to create stdout pipe: %v", err)
 		}
-		
+
 		stderrPipe, err := cmd.StderrPipe()
 		if err != nil {
 			tracker.Mutex.Lock()
@@ -410,7 +410,7 @@ func executeDelayedProcess(ctx context.Context, tracker *ProcessTracker, envVars
 		err := cmd.Wait()
 		tracker.Mutex.Lock()
 		defer tracker.Mutex.Unlock()
-		
+
 		if err != nil {
 			if exitError, ok := err.(*exec.ExitError); ok {
 				exitCode := exitError.ExitCode()
@@ -554,31 +554,31 @@ func handleSpawnProcess(ctx context.Context, request mcp.CallToolRequest) (*mcp.
 		if syncDelay {
 			// Sync mode: wait the delay, then execute and return actual status
 			time.Sleep(delay)
-			
+
 			err := executeDelayedProcess(ctx, tracker, envVars)
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
-			
+
 			registry.addProcess(tracker)
-			
+
 			result = map[string]any{
 				"process_id": processID,
 				"pid":        tracker.PID,
 				"status":     string(tracker.Status),
 			}
-			
+
 		} else {
 			// Async mode: set pending status, register immediately, start background delay
 			tracker.Status = StatusPending
 			registry.addProcess(tracker)
-			
+
 			// Start background goroutine to wait and then execute
 			go func() {
 				time.Sleep(delay)
 				executeDelayedProcess(context.Background(), tracker, envVars)
 			}()
-			
+
 			result = map[string]any{
 				"process_id": processID,
 				"pid":        0, // No PID yet since process hasn't started
@@ -591,9 +591,9 @@ func handleSpawnProcess(ctx context.Context, request mcp.CallToolRequest) (*mcp.
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
-		
+
 		registry.addProcess(tracker)
-		
+
 		result = map[string]any{
 			"process_id": processID,
 			"pid":        tracker.PID,
@@ -619,26 +619,26 @@ func handleSpawnMultipleProcesses(ctx context.Context, request mcp.CallToolReque
 			}
 		}
 	}
-	
+
 	if len(processes) == 0 {
 		return mcp.NewToolResultError("No processes specified"), nil
 	}
-	
+
 	// Results to return
 	results := []map[string]any{}
-	
+
 	// Deferred process info
 	type processInfo struct {
-		index      int
-		tracker    *ProcessTracker
-		envVars    map[string]string
-		name       string
-		processID  string
+		index     int
+		tracker   *ProcessTracker
+		envVars   map[string]string
+		name      string
+		processID string
 	}
-	
+
 	var deferredProcesses []processInfo
 	var deferredMode bool
-	
+
 	// Process each configuration
 	for i, procConfig := range processes {
 		// Extract configuration for this process
@@ -646,7 +646,7 @@ func handleSpawnMultipleProcesses(ctx context.Context, request mcp.CallToolReque
 		if !exists {
 			return mcp.NewToolResultError(fmt.Sprintf("Process %d missing required 'command' field", i)), nil
 		}
-		
+
 		// Extract optional args
 		args := []string{}
 		if argsInterface, exists := procConfig["args"]; exists {
@@ -658,11 +658,11 @@ func handleSpawnMultipleProcesses(ctx context.Context, request mcp.CallToolReque
 				}
 			}
 		}
-		
+
 		// Extract optional fields
 		name, _ := procConfig["name"].(string)
 		workingDir, _ := procConfig["working_dir"].(string)
-		
+
 		// Extract env vars
 		envVars := map[string]string{}
 		if env, exists := procConfig["env"]; exists {
@@ -674,7 +674,7 @@ func handleSpawnMultipleProcesses(ctx context.Context, request mcp.CallToolReque
 				}
 			}
 		}
-		
+
 		// Extract buffer size
 		bufferSize := int64(DefaultBufferSize)
 		if bs, exists := procConfig["buffer_size"]; exists {
@@ -682,7 +682,7 @@ func handleSpawnMultipleProcesses(ctx context.Context, request mcp.CallToolReque
 				bufferSize = int64(bsFloat)
 			}
 		}
-		
+
 		// Extract combine output
 		combineOutput := false
 		if co, exists := procConfig["combine_output"]; exists {
@@ -690,7 +690,7 @@ func handleSpawnMultipleProcesses(ctx context.Context, request mcp.CallToolReque
 				combineOutput = coBool
 			}
 		}
-		
+
 		// Extract delay
 		delay := time.Duration(0)
 		if d, exists := procConfig["delay"]; exists {
@@ -705,7 +705,7 @@ func handleSpawnMultipleProcesses(ctx context.Context, request mcp.CallToolReque
 				delay = time.Duration(delayMs) * time.Millisecond
 			}
 		}
-		
+
 		// Extract sync_delay
 		syncDelay := false
 		if sd, exists := procConfig["sync_delay"]; exists {
@@ -713,7 +713,7 @@ func handleSpawnMultipleProcesses(ctx context.Context, request mcp.CallToolReque
 				syncDelay = sdBool
 			}
 		}
-		
+
 		// Create tracker
 		processID := uuid.New().String()
 		tracker := &ProcessTracker{
@@ -731,21 +731,20 @@ func handleSpawnMultipleProcesses(ctx context.Context, request mcp.CallToolReque
 			Status:        StatusRunning,
 			StdoutBuffer:  NewRingBuffer(bufferSize),
 		}
-		
+
 		if !combineOutput {
 			tracker.StderrBuffer = NewRingBuffer(bufferSize)
 		}
-		
-		
+
 		// Determine if we need to defer this process
 		shouldDefer := deferredMode || (!syncDelay && (delay > 0 || deferredMode))
-		
+
 		if shouldDefer {
 			// We're in deferred mode - add to deferred list
 			deferredMode = true
 			tracker.Status = StatusPending
 			registry.addProcess(tracker)
-			
+
 			deferredProcesses = append(deferredProcesses, processInfo{
 				index:     i,
 				tracker:   tracker,
@@ -753,7 +752,7 @@ func handleSpawnMultipleProcesses(ctx context.Context, request mcp.CallToolReque
 				name:      name,
 				processID: processID,
 			})
-			
+
 			results = append(results, map[string]any{
 				"index":      i,
 				"name":       name,
@@ -767,7 +766,7 @@ func handleSpawnMultipleProcesses(ctx context.Context, request mcp.CallToolReque
 				// Wait for the delay
 				time.Sleep(delay)
 			}
-			
+
 			err := executeDelayedProcess(ctx, tracker, envVars)
 			if err != nil {
 				results = append(results, map[string]any{
@@ -778,9 +777,9 @@ func handleSpawnMultipleProcesses(ctx context.Context, request mcp.CallToolReque
 				})
 				continue
 			}
-			
+
 			registry.addProcess(tracker)
-			
+
 			results = append(results, map[string]any{
 				"index":      i,
 				"name":       name,
@@ -790,7 +789,7 @@ func handleSpawnMultipleProcesses(ctx context.Context, request mcp.CallToolReque
 			})
 		}
 	}
-	
+
 	// If we have deferred processes, start them in a goroutine
 	if len(deferredProcesses) > 0 {
 		go func() {
@@ -810,7 +809,7 @@ func handleSpawnMultipleProcesses(ctx context.Context, request mcp.CallToolReque
 						time.Sleep(info.tracker.DelayStart)
 					}
 				}
-				
+
 				// Execute the process
 				err := executeDelayedProcess(context.Background(), info.tracker, info.envVars)
 				if err != nil {
@@ -822,7 +821,7 @@ func handleSpawnMultipleProcesses(ctx context.Context, request mcp.CallToolReque
 			}
 		}()
 	}
-	
+
 	resultBytes, _ := json.Marshal(results)
 	return mcp.NewToolResultText(string(resultBytes)), nil
 }
@@ -909,7 +908,7 @@ func handleGetPartialProcessOutput(ctx context.Context, request mcp.CallToolRequ
 	if delay > 0 {
 		ticker := time.NewTicker(time.Duration(DelayCheckInterval) * time.Millisecond)
 		defer ticker.Stop()
-		
+
 		remaining := delay
 	delayLoop:
 		for remaining > 0 {
@@ -919,13 +918,13 @@ func handleGetPartialProcessOutput(ctx context.Context, request mcp.CallToolRequ
 				tracker.Mutex.RLock()
 				status := tracker.Status
 				tracker.Mutex.RUnlock()
-				
+
 				if status != StatusRunning && status != StatusPending {
 					// Process terminated, exit delay loop
 					break delayLoop
 				}
 				remaining -= time.Duration(DelayCheckInterval) * time.Millisecond
-				
+
 			case <-ctx.Done():
 				// Context cancelled
 				return mcp.NewToolResultError("Request cancelled"), nil
@@ -1102,7 +1101,7 @@ func handleGetFullProcessOutput(ctx context.Context, request mcp.CallToolRequest
 	if delay > 0 {
 		ticker := time.NewTicker(time.Duration(DelayCheckInterval) * time.Millisecond)
 		defer ticker.Stop()
-		
+
 		remaining := delay
 	delayLoop:
 		for remaining > 0 {
@@ -1112,13 +1111,13 @@ func handleGetFullProcessOutput(ctx context.Context, request mcp.CallToolRequest
 				tracker.Mutex.RLock()
 				status := tracker.Status
 				tracker.Mutex.RUnlock()
-				
+
 				if status != StatusRunning && status != StatusPending {
 					// Process terminated, exit delay loop
 					break delayLoop
 				}
 				remaining -= time.Duration(DelayCheckInterval) * time.Millisecond
-				
+
 			case <-ctx.Done():
 				// Context cancelled
 				return mcp.NewToolResultError("Request cancelled"), nil

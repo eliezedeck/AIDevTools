@@ -90,7 +90,7 @@ func main() {
 	)
 
 	getFullProcessOutputTool := mcp.NewTool(
-		"get_full_process_output", 
+		"get_full_process_output",
 		mcp.WithDescription("Get the complete output from a process (all data in memory)"),
 		mcp.WithString("process_id",
 			mcp.Required(),
@@ -169,7 +169,7 @@ func main() {
 	// 🚦 Setup signal handling for graceful shutdown
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-	
+
 	// Handle signals in a goroutine
 	go func() {
 		<-sigChan
@@ -188,12 +188,12 @@ func main() {
 func handleGracefulShutdown() {
 	// Get all tracked processes
 	processes := registry.getAllProcesses()
-	
+
 	// Send termination signal to all running process groups
 	for _, tracker := range processes {
 		tracker.Mutex.RLock()
-		if tracker.Process != nil && tracker.Process.Process != nil && 
-		   (tracker.Status == StatusRunning || tracker.Status == StatusPending) {
+		if tracker.Process != nil && tracker.Process.Process != nil &&
+			(tracker.Status == StatusRunning || tracker.Status == StatusPending) {
 			// Terminate the entire process group (Unix) or process (Windows)
 			err := terminateProcessGroup(tracker.Process.Process.Pid)
 			if err != nil {
@@ -203,38 +203,38 @@ func handleGracefulShutdown() {
 		}
 		tracker.Mutex.RUnlock()
 	}
-	
+
 	// Give processes up to 5 seconds to terminate gracefully
 	deadline := time.Now().Add(5 * time.Second)
 	checkInterval := 100 * time.Millisecond
-	
+
 	for time.Now().Before(deadline) {
 		allTerminated := true
-		
+
 		for _, tracker := range processes {
 			tracker.Mutex.RLock()
 			if tracker.Status == StatusRunning || tracker.Status == StatusPending {
 				allTerminated = false
 			}
 			tracker.Mutex.RUnlock()
-			
+
 			if !allTerminated {
 				break
 			}
 		}
-		
+
 		if allTerminated {
 			return
 		}
-		
+
 		time.Sleep(checkInterval)
 	}
-	
+
 	// Force kill any remaining process groups
 	for _, tracker := range processes {
 		tracker.Mutex.RLock()
 		if tracker.Process != nil && tracker.Process.Process != nil &&
-		   (tracker.Status == StatusRunning || tracker.Status == StatusPending) {
+			(tracker.Status == StatusRunning || tracker.Status == StatusPending) {
 			// Force kill the entire process group (Unix) or process (Windows)
 			err := forceKillProcessGroup(tracker.Process.Process.Pid)
 			if err != nil {
