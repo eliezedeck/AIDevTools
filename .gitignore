@@ -1,2 +1,5 @@
 sidekick/sidekick
 dist/sidekick
+
+# Local development documentation
+CLAUDE.local.md
