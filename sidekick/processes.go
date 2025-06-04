@@ -926,8 +926,8 @@ func handleGetPartialProcessOutput(ctx context.Context, request mcp.CallToolRequ
 				remaining -= time.Duration(DelayCheckInterval) * time.Millisecond
 
 			case <-ctx.Done():
-				// Context cancelled
-				return mcp.NewToolResultError("Request cancelled"), nil
+				// Context canceled
+				return mcp.NewToolResultError("Request canceled"), nil
 			}
 		}
 	}
@@ -1119,8 +1119,8 @@ func handleGetFullProcessOutput(ctx context.Context, request mcp.CallToolRequest
 				remaining -= time.Duration(DelayCheckInterval) * time.Millisecond
 
 			case <-ctx.Done():
-				// Context cancelled
-				return mcp.NewToolResultError("Request cancelled"), nil
+				// Context canceled
+				return mcp.NewToolResultError("Request canceled"), nil
 			}
 		}
 	}

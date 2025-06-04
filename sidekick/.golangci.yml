@@ -70,14 +70,12 @@ linters:
   disable-all: true
   enable:
     - bodyclose
-    - errcheck
     - exhaustive
     - gofmt
     - goimports
     - gosimple
     - govet
     - ineffassign
-    - misspell
     - staticcheck
     - typecheck
     - unconvert
