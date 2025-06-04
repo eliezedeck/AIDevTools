@@ -1,0 +1,154 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g., v0.1.0)'
+        required: true
+        type: string
+
+env:
+  GO_VERSION: "1.23"
+
+jobs:
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: ${{ env.GO_VERSION }}
+
+    - name: Get version
+      id: version
+      run: |
+        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          echo "version=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+        else
+          echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Cache Go modules
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cache/go-build
+          ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ hashFiles('sidekick/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
+
+    - name: Run tests
+      working-directory: ./sidekick
+      run: go test -v ./...
+
+    - name: Build for multiple platforms
+      working-directory: ./sidekick
+      run: |
+        mkdir -p ../dist
+        
+        # macOS ARM64
+        GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o ../dist/sidekick-darwin-arm64 main.go processes.go notifications.go
+        
+        # macOS AMD64
+        GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o ../dist/sidekick-darwin-amd64 main.go processes.go notifications.go
+        
+        # Linux ARM64
+        GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o ../dist/sidekick-linux-arm64 main.go processes.go notifications.go
+        
+        # Linux AMD64
+        GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o ../dist/sidekick-linux-amd64 main.go processes.go notifications.go
+        
+        # Windows AMD64
+        GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o ../dist/sidekick-windows-amd64.exe main.go processes.go notifications.go
+
+    - name: Create archives
+      run: |
+        cd dist
+        
+        # Create compressed archives
+        tar -czf sidekick-darwin-arm64.tar.gz sidekick-darwin-arm64
+        tar -czf sidekick-darwin-amd64.tar.gz sidekick-darwin-amd64
+        tar -czf sidekick-linux-arm64.tar.gz sidekick-linux-arm64
+        tar -czf sidekick-linux-amd64.tar.gz sidekick-linux-amd64
+        zip sidekick-windows-amd64.zip sidekick-windows-amd64.exe
+
+    - name: Generate checksums
+      run: |
+        cd dist
+        sha256sum *.tar.gz *.zip > checksums.txt
+
+    - name: Generate changelog
+      id: changelog
+      run: |
+        if git tag --list | grep -q "v"; then
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^)
+          echo "changelog<<EOF" >> $GITHUB_OUTPUT
+          git log --pretty=format:"- %s (%h)" $PREV_TAG..HEAD >> $GITHUB_OUTPUT
+          echo "" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+        else
+          echo "changelog=Initial release" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ steps.version.outputs.version }}
+        name: Release ${{ steps.version.outputs.version }}
+        body: |
+          ## Changes
+          ${{ steps.changelog.outputs.changelog }}
+          
+          ## Installation
+          
+          Download the appropriate binary for your platform:
+          
+          ### macOS
+          ```bash
+          # ARM64 (Apple Silicon)
+          curl -L https://github.com/eliezedeck/AIDevTools/releases/download/${{ steps.version.outputs.version }}/sidekick-darwin-arm64.tar.gz | tar -xz
+          
+          # AMD64 (Intel)
+          curl -L https://github.com/eliezedeck/AIDevTools/releases/download/${{ steps.version.outputs.version }}/sidekick-darwin-amd64.tar.gz | tar -xz
+          ```
+          
+          ### Linux
+          ```bash
+          # ARM64
+          curl -L https://github.com/eliezedeck/AIDevTools/releases/download/${{ steps.version.outputs.version }}/sidekick-linux-arm64.tar.gz | tar -xz
+          
+          # AMD64
+          curl -L https://github.com/eliezedeck/AIDevTools/releases/download/${{ steps.version.outputs.version }}/sidekick-linux-amd64.tar.gz | tar -xz
+          ```
+          
+          ### Windows
+          ```powershell
+          # Download and extract sidekick-windows-amd64.zip
+          ```
+          
+          ## Verification
+          
+          Verify the download with the provided checksums:
+          ```bash
+          sha256sum -c checksums.txt
+          ```
+        files: |
+          dist/*.tar.gz
+          dist/*.zip
+          dist/checksums.txt
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
