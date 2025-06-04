@@ -210,15 +210,29 @@ func filterOutput(input string, commands [][]string) (string, error) {
 		cmd := exec.CommandContext(ctx, program, args...)
 		cmd.Stdin = strings.NewReader(currentInput)
 
-		output, err := cmd.Output()
+		output, err := cmd.CombinedOutput()
+		
+		// In bash pipes, the output is always passed to the next command,
+		// regardless of exit code (unless the command completely fails to execute)
 		if err != nil {
-			// If a command fails, return what we have so far with a warning
+			// Check if this is an ExitError (command ran but exited non-zero)
+			// vs other errors (command not found, etc.)
+			if _, ok := err.(*exec.ExitError); ok {
+				// Command executed but returned non-zero exit code
+				// In bash pipes, this doesn't stop the pipeline
+				// Examples: grep returns 1 when no matches, diff returns 1 when files differ
+				currentInput = string(output)
+				continue
+			}
+			
+			// This is a real error (command not found, permission denied, etc.)
 			if ctx.Err() == context.DeadlineExceeded {
 				return currentInput, fmt.Errorf("filter command %d (%s) timed out", i, program)
 			}
 			return currentInput, fmt.Errorf("filter command %d (%s) failed: %v", i, program, err)
 		}
 
+		// Command succeeded (exit code 0)
 		currentInput = string(output)
 	}
 
