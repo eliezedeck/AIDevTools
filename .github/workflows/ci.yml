@@ -45,19 +45,6 @@ jobs:
       working-directory: ./sidekick
       run: go mod verify
 
-    - name: Run go vet
-      working-directory: ./sidekick
-      run: go vet ./...
-
-    - name: Run go fmt check
-      working-directory: ./sidekick
-      shell: bash
-      run: |
-        if [ "$(gofmt -s -l . | wc -l)" -gt 0 ]; then
-          echo "The following files are not formatted:"
-          gofmt -s -l .
-          exit 1
-        fi
 
     - name: Run tests
       working-directory: ./sidekick

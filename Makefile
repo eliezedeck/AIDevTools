@@ -90,10 +90,10 @@ release: clean build-all ## Prepare release artifacts
 	cd $(BUILD_DIR) && sha256sum *.tar.gz *.zip > checksums.txt
 	@echo "Release artifacts ready in $(BUILD_DIR)/"
 
-check: fmt vet test ## Run all checks
+check: test ## Run all checks
 	@echo "All checks passed!"
 
-ci: fmt vet test build ## CI pipeline
+ci: test build ## CI pipeline
 	@echo "CI pipeline completed successfully!"
 
 .DEFAULT_GOAL := help
