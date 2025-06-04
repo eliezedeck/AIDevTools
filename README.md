@@ -501,7 +501,6 @@ make build  # or: cd sidekick && go build
 make test           # Run all tests
 make test-race      # Race condition detection
 make test-coverage  # Coverage report
-make lint          # Code linting
 ```
 
 ### Contributing

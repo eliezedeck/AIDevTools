@@ -6,7 +6,9 @@
       "Bash(go mod:*)",
       "Bash(chmod:*)",
       "Bash(mv:*)",
-      "Bash(rmdir:*)"
+      "Bash(rmdir:*)",
+      "mcp__sidekick__notifications_speak",
+      "Bash(git add:*)"
     ],
     "deny": []
   }
