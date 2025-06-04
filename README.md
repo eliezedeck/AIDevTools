@@ -1,6 +1,6 @@
 # Sidekick Daemon
 
-A Golang daemon that provides an MCP (Model Context Protocol) server for audio notifications and advanced process management functionality, designed for use with Claude Code and other LLMs supporting MCP.
+A Golang daemon that provides an MCP (Model Context Protocol) server for audio notifications (macOS only) and advanced process management functionality, designed for use with Claude Code and other LLMs supporting MCP.
 
 ## 🚀 Features
 
@@ -15,7 +15,9 @@ A Golang daemon that provides an MCP (Model Context Protocol) server for audio n
 
 ## 🛠️ Installation & Usage
 
-This daemon exposes 9 MCP tools: 1 for audio notifications and 8 for process management.
+This daemon exposes MCP tools for process management and audio notifications. Tool count varies by platform:
+- **macOS**: 9 tools (8 process management + 1 audio notification)
+- **Other platforms**: 8 tools (process management only)
 
 ### 📦 Quick Installation
 
@@ -62,7 +64,7 @@ This daemon exposes 9 MCP tools: 1 for audio notifications and 8 for process man
 
 4. **Use the tools in Claude Code:**
    - Open Claude Code in your project.
-   - All 8 tools will be auto-discovered and available in the tool palette or via `/` commands.
+   - All tools will be auto-discovered and available in the tool palette or via `/` commands.
    - You can now call the tools from chat, automations, or workflows.
 
 ---
@@ -81,10 +83,10 @@ This daemon exposes 9 MCP tools: 1 for audio notifications and 8 for process man
 
 ## 🛠️ Available Tools
 
-### Audio Notifications
+### Audio Notifications (macOS Only)
 
 #### `notifications_speak`
-Plays system sound and speaks text using macOS TTS.
+Plays system sound and speaks text using macOS TTS. Only available when running on macOS.
 
 | Argument | Type   | Required | Description                  |
 |----------|--------|----------|------------------------------|
@@ -384,7 +386,8 @@ Get detailed status information about a process.
 - **Process Group Management**: Each spawned process runs in its own process group, ensuring all child processes and descendants are properly cleaned up on termination
 
 ## 📝 Notes
-- macOS only (uses `afplay` and `say` for notifications)
+- **Audio notifications**: macOS only (uses `afplay` and `say` commands)
+- **Process management**: Available on all platforms
 - Requires MCP-compatible client (e.g. Claude Code)
 - Process output stored in configurable ring buffers (default 10MB) with automatic cleanup (1-hour timeout)
 - Color output is automatically disabled for clean parsing

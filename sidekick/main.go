@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"runtime"
 	"syscall"
 	"time"
 
@@ -19,18 +20,18 @@ func main() {
 		server.WithToolCapabilities(false),
 	)
 
-	// 🗣️ Define the notifications_speak tool
-	speakTool := mcp.NewTool(
-		"notifications_speak",
-		mcp.WithDescription("Play a system sound and speak the provided text (max 50 words)"),
-		mcp.WithString("text",
-			mcp.Required(),
-			mcp.Description("Text to speak (max 50 words)"),
-		),
-	)
-
-	// 🔗 Register the tool handler
-	s.AddTool(speakTool, handleSpeak)
+	// 🗣️ Define and register the notifications_speak tool (macOS only)
+	if runtime.GOOS == "darwin" {
+		speakTool := mcp.NewTool(
+			"notifications_speak",
+			mcp.WithDescription("Play a system sound and speak the provided text (max 50 words)"),
+			mcp.WithString("text",
+				mcp.Required(),
+				mcp.Description("Text to speak (max 50 words)"),
+			),
+		)
+		s.AddTool(speakTool, handleSpeak)
+	}
 
 	// 🔧 Define process management tools
 	spawnProcessTool := mcp.NewTool(
