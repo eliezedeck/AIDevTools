@@ -28,13 +28,13 @@ func handleSpeak(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToo
 
 	// 🔊 Play system sound asynchronously
 	go func() {
-		exec.Command("afplay", "/System/Library/Sounds/Glass.aiff", "-v", "5").Run()
+		_ = exec.Command("afplay", "/System/Library/Sounds/Glass.aiff", "-v", "5").Run()
 	}()
 
 	// 🗣️ Speak the text after a short delay
 	go func() {
 		time.Sleep(500 * time.Millisecond)
-		exec.Command("say", "-v", "Zoe (Premium)", text).Run()
+		_ = exec.Command("say", "-v", "Zoe (Premium)", text).Run()
 	}()
 
 	return mcp.NewToolResultText("Notification spoken!"), nil

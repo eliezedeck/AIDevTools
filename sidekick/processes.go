@@ -576,7 +576,7 @@ func handleSpawnProcess(ctx context.Context, request mcp.CallToolRequest) (*mcp.
 			// Start background goroutine to wait and then execute
 			go func() {
 				time.Sleep(delay)
-				executeDelayedProcess(context.Background(), tracker, envVars)
+				_ = executeDelayedProcess(context.Background(), tracker, envVars)
 			}()
 
 			result = map[string]any{

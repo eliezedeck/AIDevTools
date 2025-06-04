@@ -64,7 +64,7 @@ jobs:
 
     - name: Build binary
       working-directory: ./sidekick
-      run: go build -v -o sidekick main.go processes.go notifications.go
+      run: go build -v -o sidekick .
 
     - name: Upload coverage to Codecov
       if: matrix.os == 'ubuntu-latest'
