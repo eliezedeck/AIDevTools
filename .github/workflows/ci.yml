@@ -51,6 +51,7 @@ jobs:
 
     - name: Run go fmt check
       working-directory: ./sidekick
+      shell: bash
       run: |
         if [ "$(gofmt -s -l . | wc -l)" -gt 0 ]; then
           echo "The following files are not formatted:"
@@ -110,7 +111,7 @@ jobs:
     - name: Run Gosec Security Scanner
       run: |
         # Install gosec
-        go install github.com/securecodewarrior/gosec/v2/cmd/gosec@latest
+        go install github.com/securecodewarrior/gosec/cmd/gosec@latest
         # Run gosec scan
         gosec -no-fail -fmt sarif -out gosec-results.sarif ./sidekick/...
 
