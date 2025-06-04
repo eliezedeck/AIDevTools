@@ -45,7 +45,7 @@ jobs:
         path: |
           ~/.cache/go-build
           ~/go/pkg/mod
-        key: ${{ runner.os }}-go-${{ hashFiles('sidekick/go.sum') }}
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
         restore-keys: |
           ${{ runner.os }}-go-
 
@@ -59,19 +59,19 @@ jobs:
         mkdir -p ../dist
         
         # macOS ARM64
-        GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o ../dist/sidekick-darwin-arm64 main.go processes.go notifications.go
+        GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o ../dist/sidekick-darwin-arm64 .
         
         # macOS AMD64
-        GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o ../dist/sidekick-darwin-amd64 main.go processes.go notifications.go
+        GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o ../dist/sidekick-darwin-amd64 .
         
         # Linux ARM64
-        GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o ../dist/sidekick-linux-arm64 main.go processes.go notifications.go
+        GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o ../dist/sidekick-linux-arm64 .
         
         # Linux AMD64
-        GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o ../dist/sidekick-linux-amd64 main.go processes.go notifications.go
+        GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o ../dist/sidekick-linux-amd64 .
         
         # Windows AMD64
-        GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o ../dist/sidekick-windows-amd64.exe main.go processes.go notifications.go
+        GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o ../dist/sidekick-windows-amd64.exe .
 
     - name: Create archives
       run: |
