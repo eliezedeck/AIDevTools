@@ -3,3 +3,6 @@ dist/sidekick
 
 # Local development documentation
 CLAUDE.local.md
+
+# Local development commands
+.claude/commands/
