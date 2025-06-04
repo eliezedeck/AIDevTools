@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"os"
 	"os/signal"
@@ -12,7 +13,19 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 )
 
+// Version can be set at build time using -ldflags "-X main.version=x.x.x"
+var version = "dev"
+
 func main() {
+	// Handle --version flag
+	versionFlag := flag.Bool("version", false, "Print version and exit")
+	flag.Parse()
+
+	if *versionFlag {
+		fmt.Printf("sidekick %s\n", version)
+		os.Exit(0)
+	}
+
 	// 🛠️ Create a new MCP server
 	s := server.NewMCPServer(
 		"Sidekick Notifications",

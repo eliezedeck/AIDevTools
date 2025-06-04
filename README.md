@@ -6,7 +6,6 @@
 [![Release](https://img.shields.io/github/v/release/eliezedeck/AIDevTools)](https://github.com/eliezedeck/AIDevTools/releases)
 [![Go Version](https://img.shields.io/badge/go-1.23+-blue.svg)](https://golang.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Go Report Card](https://goreportcard.com/badge/github.com/eliezedeck/AIDevTools)](https://goreportcard.com/report/github.com/eliezedeck/AIDevTools)
 
 **Production-ready MCP server for AI agent process management and notifications**  
 *Part of the AIDevTools ecosystem for AI-powered development*

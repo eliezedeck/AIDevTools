@@ -191,7 +191,9 @@ build_from_source() {
     fi
     
     mkdir -p "$INSTALL_DIR"
-    if ! go build -ldflags="-s -w" -o "$INSTALL_DIR/$BINARY_NAME" main.go processes.go notifications.go; then
+    # Try to get version from git
+    GIT_VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "dev")
+    if ! go build -ldflags="-s -w -X main.version=$GIT_VERSION" -o "$INSTALL_DIR/$BINARY_NAME" .; then
         log_error "Failed to build binary"
         exit 1
     fi

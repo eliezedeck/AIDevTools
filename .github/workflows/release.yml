@@ -60,20 +60,24 @@ jobs:
       run: |
         mkdir -p ../dist
         
+        # Build with version injection
+        VERSION="${{ steps.version.outputs.version }}"
+        LDFLAGS="-s -w -X main.version=${VERSION}"
+        
         # macOS ARM64
-        GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o ../dist/sidekick-darwin-arm64 .
+        GOOS=darwin GOARCH=arm64 go build -ldflags="${LDFLAGS}" -o ../dist/sidekick-darwin-arm64 .
         
         # macOS AMD64
-        GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o ../dist/sidekick-darwin-amd64 .
+        GOOS=darwin GOARCH=amd64 go build -ldflags="${LDFLAGS}" -o ../dist/sidekick-darwin-amd64 .
         
         # Linux ARM64
-        GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o ../dist/sidekick-linux-arm64 .
+        GOOS=linux GOARCH=arm64 go build -ldflags="${LDFLAGS}" -o ../dist/sidekick-linux-arm64 .
         
         # Linux AMD64
-        GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o ../dist/sidekick-linux-amd64 .
+        GOOS=linux GOARCH=amd64 go build -ldflags="${LDFLAGS}" -o ../dist/sidekick-linux-amd64 .
         
         # Windows AMD64
-        GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o ../dist/sidekick-windows-amd64.exe .
+        GOOS=windows GOARCH=amd64 go build -ldflags="${LDFLAGS}" -o ../dist/sidekick-windows-amd64.exe .
 
     - name: Create archives
       run: |
