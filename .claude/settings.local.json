@@ -9,11 +9,11 @@
       "Bash(rmdir:*)",
       "mcp__sidekick__notifications_speak",
       "Bash(git add:*)",
-      "Bash(git push:*)",
       "Bash(gh run list:*)",
       "Bash(gh run view:*)",
       "Bash(gh run watch:*)",
-      "Bash(go fmt:*)"
+      "Bash(go fmt:*)",
+      "Bash(gh release view:*)"
     ],
     "deny": []
   }
