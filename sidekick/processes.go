@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -318,10 +317,8 @@ func executeDelayedProcess(ctx context.Context, tracker *ProcessTracker, envVars
 		cmd.Dir = tracker.WorkingDir
 	}
 	
-	// Put process in its own process group for proper cleanup
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Setpgid: true,
-	}
+	// Configure process group for proper cleanup
+	configureProcessGroup(cmd)
 
 	env := os.Environ()
 	env = append(env, "NO_COLOR=1", "TERM=dumb")
@@ -1341,11 +1338,13 @@ func handleKillProcess(ctx context.Context, request mcp.CallToolRequest) (*mcp.C
 			tracker.StdinWriter.Close()
 		}
 
-		// Kill the entire process group
-		err := syscall.Kill(-tracker.Process.Process.Pid, syscall.SIGTERM)
+		// Kill the entire process group (Unix) or process (Windows)
+		err := terminateProcessGroup(tracker.Process.Process.Pid)
 		if err != nil {
-			// If SIGTERM fails, force kill the process group
-			syscall.Kill(-tracker.Process.Process.Pid, syscall.SIGKILL)
+			// If platform-specific termination fails, use standard process.Kill()
+			if tracker.Process.Process != nil {
+				tracker.Process.Process.Kill()
+			}
 		}
 		tracker.Status = StatusKilled
 	}

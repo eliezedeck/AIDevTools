@@ -189,13 +189,17 @@ func handleGracefulShutdown() {
 	// Get all tracked processes
 	processes := registry.getAllProcesses()
 	
-	// Send SIGTERM to all running process groups
+	// Send termination signal to all running process groups
 	for _, tracker := range processes {
 		tracker.Mutex.RLock()
 		if tracker.Process != nil && tracker.Process.Process != nil && 
 		   (tracker.Status == StatusRunning || tracker.Status == StatusPending) {
-			// Kill the entire process group by sending signal to -pid
-			_ = syscall.Kill(-tracker.Process.Process.Pid, syscall.SIGTERM)
+			// Terminate the entire process group (Unix) or process (Windows)
+			err := terminateProcessGroup(tracker.Process.Process.Pid)
+			if err != nil {
+				// If platform-specific termination fails, use standard process.Kill()
+				tracker.Process.Process.Kill()
+			}
 		}
 		tracker.Mutex.RUnlock()
 	}
@@ -231,8 +235,12 @@ func handleGracefulShutdown() {
 		tracker.Mutex.RLock()
 		if tracker.Process != nil && tracker.Process.Process != nil &&
 		   (tracker.Status == StatusRunning || tracker.Status == StatusPending) {
-			// Kill the entire process group with SIGKILL
-			_ = syscall.Kill(-tracker.Process.Process.Pid, syscall.SIGKILL)
+			// Force kill the entire process group (Unix) or process (Windows)
+			err := forceKillProcessGroup(tracker.Process.Process.Pid)
+			if err != nil {
+				// If platform-specific force kill fails, use standard process.Kill()
+				tracker.Process.Process.Kill()
+			}
 		}
 		tracker.Mutex.RUnlock()
 	}
