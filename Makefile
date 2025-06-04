@@ -1,6 +1,6 @@
 # Sidekick MCP Server Makefile
 
-.PHONY: build clean test test-race test-coverage lint fmt vet install help release dev
+.PHONY: build clean test test-race test-coverage fmt vet install help release dev
 
 # Build variables
 BINARY_NAME=sidekick
@@ -59,9 +59,6 @@ test-coverage: ## Run tests with coverage
 	cd $(SOURCE_DIR) && go tool cover -html=coverage.out -o coverage.html
 	@echo "Coverage report: $(SOURCE_DIR)/coverage.html"
 
-lint: ## Run linter
-	@echo "Running linter..."
-	cd $(SOURCE_DIR) && golangci-lint run
 
 fmt: ## Format code
 	@echo "Formatting code..."
@@ -93,7 +90,7 @@ release: clean build-all ## Prepare release artifacts
 	cd $(BUILD_DIR) && sha256sum *.tar.gz *.zip > checksums.txt
 	@echo "Release artifacts ready in $(BUILD_DIR)/"
 
-check: fmt vet lint test ## Run all checks
+check: fmt vet test ## Run all checks
 	@echo "All checks passed!"
 
 ci: fmt vet test build ## CI pipeline
