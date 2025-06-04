@@ -13,7 +13,13 @@
       "Bash(gh run view:*)",
       "Bash(gh run watch:*)",
       "Bash(go fmt:*)",
-      "Bash(gh release view:*)"
+      "Bash(gh release view:*)",
+      "mcp__sidekick__spawn_process",
+      "mcp__sidekick__get_full_process_output",
+      "mcp__sidekick__get_partial_process_output",
+      "mcp__sidekick__kill_process",
+      "Bash(go test:*)",
+      "Bash(grep:*)"
     ],
     "deny": []
   }

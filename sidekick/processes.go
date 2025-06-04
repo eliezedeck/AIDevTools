@@ -209,7 +209,8 @@ func filterOutput(input string, commands [][]string) (string, error) {
 
 		cmd := exec.CommandContext(ctx, program, args...)
 		cmd.Stdin = strings.NewReader(currentInput)
-
+		
+		// Run command and get output
 		output, err := cmd.CombinedOutput()
 		
 		// In bash pipes, the output is always passed to the next command,
