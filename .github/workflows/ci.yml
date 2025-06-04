@@ -48,7 +48,13 @@ jobs:
 
     - name: Run tests
       working-directory: ./sidekick
-      run: go test -v -race -coverprofile=coverage.out ./...
+      run: |
+        if [ "$RUNNER_OS" == "Linux" ]; then
+          go test -v -race -coverprofile=coverage.out ./...
+        else
+          go test -v ./...
+        fi
+      shell: bash
 
     - name: Build binary
       working-directory: ./sidekick
