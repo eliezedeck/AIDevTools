@@ -8,12 +8,73 @@ import (
 	"time"
 
 	"github.com/mark3labs/mcp-go/server"
+	"strings"
 )
 
 // SSEServerConfig holds configuration for the SSE server
 type SSEServerConfig struct {
 	Host string
 	Port string
+}
+
+// sseHandler wraps the SSE server to track connections
+type sseHandler struct {
+	sseServer *server.SSEServer
+}
+
+// ServeHTTP implements http.Handler
+func (h *sseHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Check if this is an SSE connection request
+	if strings.HasSuffix(r.URL.Path, "/sse") {
+		// Extract session ID from the SSE response
+		// We'll need to wrap the response writer to capture the session ID
+		wrapped := &responseWrapper{
+			ResponseWriter: w,
+			request:       r,
+		}
+		
+		// Call the original SSE handler
+		h.sseServer.ServeHTTP(wrapped, r)
+		
+		// If we captured a session ID, track the connection
+		if wrapped.sessionID != "" {
+			// This goroutine will wait for the SSE connection to close
+			go func(sessionID string) {
+				<-r.Context().Done()
+				// SSE connection closed
+				log.Printf("🔌 [SSE] Client disconnected from SSE endpoint (session: %s)\n", sessionID)
+				handleSessionClosed(sessionID)
+			}(wrapped.sessionID)
+		}
+	} else {
+		// For other requests (like /message endpoints), just pass through
+		h.sseServer.ServeHTTP(w, r)
+	}
+}
+
+// responseWrapper captures the session ID from SSE responses
+type responseWrapper struct {
+	http.ResponseWriter
+	request   *http.Request
+	sessionID string
+	written   bool
+}
+
+// Write captures the session ID from the initial SSE response
+func (w *responseWrapper) Write(p []byte) (int, error) {
+	if !w.written && strings.Contains(string(p), "endpoint") {
+		// Try to extract session ID from the endpoint message
+		// Format: data: {"endpoint":"/mcp/message/{sessionId}"}
+		if start := strings.Index(string(p), "/mcp/message/"); start != -1 {
+			start += len("/mcp/message/")
+			if end := strings.IndexAny(string(p[start:]), "\"}\n"); end != -1 {
+				w.sessionID = string(p[start : start+end])
+				log.Printf("🔗 [SSE] Client connected to SSE endpoint (session: %s)\n", w.sessionID)
+			}
+		}
+		w.written = true
+	}
+	return w.ResponseWriter.Write(p)
 }
 
 // StartSSEServer starts the MCP server in SSE mode
@@ -30,8 +91,10 @@ func StartSSEServer(mcpServer *server.MCPServer, config SSEServerConfig) error {
 	// Store SSE server globally for session tracking
 	globalSSEServer = sseServer
 	
-	// Start session monitor goroutine
-	go monitorSSESessions()
+	// Create a custom handler that wraps the SSE server
+	handler := &sseHandler{
+		sseServer: sseServer,
+	}
 	
 	// Start HTTP server
 	addr := fmt.Sprintf("%s:%s", config.Host, config.Port)
@@ -41,7 +104,7 @@ func StartSSEServer(mcpServer *server.MCPServer, config SSEServerConfig) error {
 	// Create HTTP server
 	httpServer := &http.Server{
 		Addr:    addr,
-		Handler: sseServer,
+		Handler: handler,
 	}
 	
 	// Start server in a goroutine to handle graceful shutdown
@@ -76,32 +139,6 @@ func StartSSEServer(mcpServer *server.MCPServer, config SSEServerConfig) error {
 	}
 }
 
-// monitorSSESessions periodically checks for closed sessions and cleans up their processes
-func monitorSSESessions() {
-	ticker := time.NewTicker(10 * time.Second)
-	defer ticker.Stop()
-	
-	for {
-		select {
-		case <-ticker.C:
-			// Check each tracked session to see if it's still active
-			sessions := sessionManager.GetAllSessions()
-			for sessionID, session := range sessions {
-				// If the session's context is done, it means the session is closed
-				select {
-				case <-session.Context.Done():
-					// Session is closed, trigger cleanup
-					handleSessionClosed(sessionID)
-				default:
-					// Session is still active
-				}
-			}
-		case <-shutdownChan:
-			// Server is shutting down
-			return
-		}
-	}
-}
 
 // handleSessionClosed is called when an SSE session is closed
 func handleSessionClosed(sessionID string) {

@@ -693,7 +693,7 @@ func handleSpawnProcess(ctx context.Context, request mcp.CallToolRequest) (*mcp.
 			
 			// Add to session manager if in SSE mode
 			if sessionID != "" && sessionManager != nil {
-				sessionManager.AddProcessToSession(sessionID, processID, ctx)
+				sessionManager.AddProcessToSession(sessionID, processID)
 			}
 
 			result = map[string]any{
@@ -709,7 +709,7 @@ func handleSpawnProcess(ctx context.Context, request mcp.CallToolRequest) (*mcp.
 			
 			// Add to session manager if in SSE mode
 			if sessionID != "" && sessionManager != nil {
-				sessionManager.AddProcessToSession(sessionID, processID, ctx)
+				sessionManager.AddProcessToSession(sessionID, processID)
 			}
 
 			// Start background goroutine to wait and then execute
@@ -735,7 +735,7 @@ func handleSpawnProcess(ctx context.Context, request mcp.CallToolRequest) (*mcp.
 		
 		// Add to session manager if in SSE mode
 		if sessionID != "" && sessionManager != nil {
-			sessionManager.AddProcessToSession(sessionID, processID, ctx)
+			sessionManager.AddProcessToSession(sessionID, processID)
 		}
 
 		result = map[string]any{
@@ -896,7 +896,7 @@ func handleSpawnMultipleProcesses(ctx context.Context, request mcp.CallToolReque
 			
 			// Add to session manager if in SSE mode
 			if sessionID != "" && sessionManager != nil {
-				sessionManager.AddProcessToSession(sessionID, processID, ctx)
+				sessionManager.AddProcessToSession(sessionID, processID)
 			}
 
 			deferredProcesses = append(deferredProcesses, processInfo{
@@ -936,7 +936,7 @@ func handleSpawnMultipleProcesses(ctx context.Context, request mcp.CallToolReque
 			
 			// Add to session manager if in SSE mode
 			if sessionID != "" && sessionManager != nil {
-				sessionManager.AddProcessToSession(sessionID, processID, ctx)
+				sessionManager.AddProcessToSession(sessionID, processID)
 			}
 
 			results = append(results, map[string]any{

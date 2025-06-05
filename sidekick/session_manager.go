@@ -19,6 +19,7 @@ type Session struct {
 	ID        string
 	Processes []string // Process IDs owned by this session
 	Context   context.Context
+	Cancel    context.CancelFunc // Cancel function for the session context
 }
 
 // Global session manager instance
@@ -41,7 +42,7 @@ func GetSessionFromContext(ctx context.Context) string {
 }
 
 // CreateSession creates a new session
-func (sm *SessionManager) CreateSession(sessionID string, ctx context.Context) *Session {
+func (sm *SessionManager) CreateSession(sessionID string) *Session {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 	
@@ -50,10 +51,14 @@ func (sm *SessionManager) CreateSession(sessionID string, ctx context.Context) *
 		return sm.sessions[sessionID]
 	}
 	
+	// Create a long-lived context for this session
+	ctx, cancel := context.WithCancel(context.Background())
+	
 	session := &Session{
 		ID:        sessionID,
 		Processes: []string{},
 		Context:   ctx,
+		Cancel:    cancel,
 	}
 	
 	sm.sessions[sessionID] = session
@@ -71,7 +76,7 @@ func (sm *SessionManager) GetSession(sessionID string) (*Session, bool) {
 }
 
 // AddProcessToSession associates a process with a session
-func (sm *SessionManager) AddProcessToSession(sessionID, processID string, ctx context.Context) {
+func (sm *SessionManager) AddProcessToSession(sessionID, processID string) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 	
@@ -81,12 +86,10 @@ func (sm *SessionManager) AddProcessToSession(sessionID, processID string, ctx c
 			processID, sessionID, len(session.Processes))
 	} else {
 		// Create session if it doesn't exist (first process for this session)
-		session := &Session{
-			ID:        sessionID,
-			Processes: []string{processID},
-			Context:   ctx,
-		}
-		sm.sessions[sessionID] = session
+		sm.mu.Unlock()
+		session := sm.CreateSession(sessionID)
+		sm.mu.Lock()
+		session.Processes = append(session.Processes, processID)
 		log.Printf("🔗 [SSE] New session %s created with first process %s\n", sessionID, processID)
 	}
 }
@@ -98,6 +101,10 @@ func (sm *SessionManager) RemoveSession(sessionID string) []string {
 	
 	if session, exists := sm.sessions[sessionID]; exists {
 		processes := session.Processes
+		// Cancel the session context
+		if session.Cancel != nil {
+			session.Cancel()
+		}
 		delete(sm.sessions, sessionID)
 		return processes
 	}
@@ -144,7 +151,8 @@ func ExtractSessionFromContext(ctx context.Context) string {
 	// Extract session from context using mark3labs/mcp-go method
 	session := server.ClientSessionFromContext(ctx)
 	if session != nil {
-		return session.SessionID()
+		sessionID := session.SessionID()
+		return sessionID
 	}
 	
 	return ""
