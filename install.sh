@@ -5,6 +5,7 @@
 # Usage: curl -sSL https://raw.githubusercontent.com/eliezedeck/AIDevTools/main/install.sh | bash
 # Options:
 #   --force-build-from-source    Build from source instead of downloading pre-built binary
+#   --use-local-dir             Use current directory as source (only with --force-build-from-source)
 
 set -e
 
@@ -17,14 +18,19 @@ GITHUB_RELEASES="https://github.com/$REPO/releases"
 
 # Parse command line arguments
 FORCE_BUILD=false
-for arg in "$@"; do
-    case $arg in
+USE_LOCAL_DIR=false
+while [[ $# -gt 0 ]]; do
+    case $1 in
         --force-build-from-source)
             FORCE_BUILD=true
             shift
             ;;
+        --use-local-dir)
+            USE_LOCAL_DIR=true
+            shift
+            ;;
         *)
-            # Unknown option
+            shift
             ;;
     esac
 done
@@ -176,7 +182,11 @@ download_binary() {
 
 # Build from source as fallback
 build_from_source() {
-    log_warning "Pre-built binary not available. Attempting to build from source..."
+    if [[ "$USE_LOCAL_DIR" == "true" ]]; then
+        log_info "Building from local directory..."
+    else
+        log_warning "Pre-built binary not available. Attempting to build from source..."
+    fi
     
     if ! command_exists go; then
         log_error "Go is not installed. Please install Go from https://golang.org/dl/"
@@ -184,22 +194,37 @@ build_from_source() {
         exit 1
     fi
     
-    if ! command_exists git; then
-        log_error "Git is not installed. Please install Git."
-        exit 1
-    fi
+    local build_dir
     
-    local temp_dir
-    temp_dir=$(mktemp -d)
-    
-    log_info "Cloning repository..."
-    if ! git clone "https://github.com/$REPO.git" "$temp_dir/AIDevTools"; then
-        log_error "Failed to clone repository"
-        exit 1
+    if [[ "$USE_LOCAL_DIR" == "true" ]]; then
+        # Use the current script's directory as the repository
+        build_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+        log_info "Using local directory: $build_dir"
+        
+        # Verify we're in the right place
+        if [[ ! -d "$build_dir/sidekick" ]] || [[ ! -f "$build_dir/sidekick/main.go" ]]; then
+            log_error "Not in AIDevTools repository root. Expected to find sidekick/main.go"
+            exit 1
+        fi
+    else
+        if ! command_exists git; then
+            log_error "Git is not installed. Please install Git."
+            exit 1
+        fi
+        
+        local temp_dir
+        temp_dir=$(mktemp -d)
+        build_dir="$temp_dir/AIDevTools"
+        
+        log_info "Cloning repository..."
+        if ! git clone "https://github.com/$REPO.git" "$build_dir"; then
+            log_error "Failed to clone repository"
+            exit 1
+        fi
     fi
     
     log_info "Building from source..."
-    cd "$temp_dir/AIDevTools/sidekick"
+    cd "$build_dir/sidekick"
     
     if ! go mod download; then
         log_error "Failed to download Go dependencies"
@@ -217,8 +242,10 @@ build_from_source() {
     chmod +x "$INSTALL_DIR/$BINARY_NAME"
     log_success "Binary built and installed to $INSTALL_DIR/$BINARY_NAME"
     
-    # Cleanup
-    rm -rf "$temp_dir"
+    # Cleanup only if we used a temp directory
+    if [[ "$USE_LOCAL_DIR" != "true" ]] && [[ -n "${temp_dir:-}" ]]; then
+        rm -rf "$temp_dir"
+    fi
 }
 
 # Check if PATH includes install directory
@@ -313,7 +340,11 @@ main() {
     
     # Check if force build is requested
     if [[ "$FORCE_BUILD" == "true" ]]; then
-        log_info "Force build from source requested"
+        if [[ "$USE_LOCAL_DIR" == "true" ]]; then
+            log_info "Force build from local directory requested"
+        else
+            log_info "Force build from source requested"
+        fi
         build_from_source
     else
         # Get latest version
