@@ -10,7 +10,7 @@
 **Production-ready MCP server for AI agent process management and notifications**  
 *Part of the AIDevTools ecosystem for AI-powered development*
 
-[📖 Documentation](#-documentation) • [🚀 Quick Start](#-quick-start) • [⭐ Features](#-features) • [🛠️ API Reference](#-api-reference) • [🤝 Contributing](#-contributing)
+[🚀 Quick Start](#-quick-start) • [⭐ Features](#-features) • [📦 Installation](#-installation) • [🛠️ API Reference](#-api-reference) • [🤝 Contributing](#-contributing)
 
 </div>
 
@@ -19,8 +19,8 @@
 ## 📋 Table of Contents
 
 - [Overview](#-overview)
-- [Features](#-features)
 - [Quick Start](#-quick-start)
+- [Features](#-features)
 - [Installation](#-installation)
 - [Configuration](#-configuration)
 - [API Reference](#-api-reference)
@@ -36,6 +36,30 @@
 **Sidekick** is a high-performance [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server that provides AI agents with powerful process management and notification capabilities. Part of the **AIDevTools** ecosystem - a collection of tools designed to enhance AI-powered software development workflows.
 
 Built specifically for [Claude Code](https://claude.ai/code) and other MCP-compatible AI systems, Sidekick enables AI agents to spawn, monitor, and control system processes with enterprise-grade reliability.
+
+## 🚀 Quick Start
+
+### 30-Second Installation
+
+```bash
+# Install Sidekick
+curl -sSL https://raw.githubusercontent.com/eliezedeck/AIDevTools/main/install.sh | bash
+
+# Add to Claude Code
+claude mcp add sidekick ~/.local/bin/sidekick
+
+# Done! Tools are auto-discovered and ready to use
+```
+
+### Verify Installation
+
+```bash
+# Check if Sidekick is available
+sidekick --version
+
+# Verify MCP registration
+claude mcp list
+```
 
 ### Why Sidekick?
 
@@ -75,46 +99,20 @@ Built specifically for [Claude Code](https://claude.ai/code) and other MCP-compa
 - **Memory Management**: Ring buffers with automatic old data discarding
 - **Error Handling**: Comprehensive error reporting and recovery
 
-## 🚀 Quick Start
-
-### 30-Second Setup
-
-```bash
-# 1. Install Sidekick
-curl -sSL https://raw.githubusercontent.com/eliezedeck/AIDevTools/main/install.sh | bash
-
-# 2. Add to Claude Code
-claude mcp add sidekick ~/.local/bin/sidekick
-
-# 3. Start using in Claude Code
-# Tools are auto-discovered and ready to use!
-```
-
-### Verify Installation
-
-```bash
-# Check if Sidekick is available
-sidekick --version
-
-# Verify MCP registration
-claude mcp list
-```
-
 ## 📦 Installation
 
-### Option 1: Quick Install Script *(Recommended)*
+### More Installation Options
+
+Besides the quick install shown above, you have several options:
+
+#### Option 1: Force Build from Source
 
 ```bash
-# Download and install in one command
-curl -sSL https://raw.githubusercontent.com/eliezedeck/AIDevTools/main/install.sh | bash
-
-# Force build from source (useful for development or custom builds)
+# Build from source instead of downloading pre-built binary
 curl -sSL https://raw.githubusercontent.com/eliezedeck/AIDevTools/main/install.sh | bash -s -- --force-build-from-source
 ```
 
-### Option 2: Manual Installation
-
-#### Download Pre-built Binary
+#### Option 2: Download Pre-built Binary Manually
 
 ```bash
 # macOS (Apple Silicon)
@@ -134,7 +132,7 @@ sudo mv sidekick-* /usr/local/bin/sidekick
 chmod +x /usr/local/bin/sidekick
 ```
 
-#### Build from Source
+#### Option 3: Build from Source Manually
 
 ```bash
 # Prerequisites: Go 1.23+
@@ -146,7 +144,7 @@ go build -o sidekick main.go processes.go notifications.go
 sudo mv sidekick /usr/local/bin/
 ```
 
-### Option 3: Package Managers
+#### Option 4: Package Managers
 
 ```bash
 # Homebrew (coming soon)
