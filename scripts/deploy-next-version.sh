@@ -2,6 +2,19 @@
 set -e
 
 # Deploy the next version by pushing to main, waiting for CI, then creating a new version tag
+# Usage: deploy-next-version.sh [version]
+# Example: deploy-next-version.sh v0.2.0
+
+# Check if version is provided as argument
+if [ $# -eq 1 ]; then
+    NEW_TAG="$1"
+    # Validate version format
+    if [[ ! "$NEW_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        echo "❌ Invalid version format. Use v<major>.<minor>.<patch> (e.g., v0.2.0)"
+        exit 1
+    fi
+    echo "📌 Manual version specified: $NEW_TAG"
+fi
 
 # Step 1: Push to main branch
 echo "🚀 Pushing to main branch..."
@@ -42,25 +55,34 @@ if [ $ELAPSED -ge $MAX_WAIT ]; then
     exit 1
 fi
 
-# Step 3: Get latest version tag and increment
-echo "🏷️ Finding latest version tag..."
-LATEST_TAG=$(git tag -l "v*" | sort -V | tail -n1)
-if [ -z "$LATEST_TAG" ]; then
-    echo "❌ No version tags found"
-    exit 1
+# Step 3: Determine version tag
+if [ -z "$NEW_TAG" ]; then
+    # No manual version provided, auto-increment
+    echo "🏷️ Finding latest version tag..."
+    LATEST_TAG=$(git tag -l "v*" | sort -V | tail -n1)
+    if [ -z "$LATEST_TAG" ]; then
+        echo "❌ No version tags found"
+        exit 1
+    fi
+
+    echo "📌 Latest tag: $LATEST_TAG"
+
+    # Extract version components and increment patch
+    VERSION=${LATEST_TAG#v}
+    MAJOR=$(echo $VERSION | cut -d. -f1)
+    MINOR=$(echo $VERSION | cut -d. -f2)
+    PATCH=$(echo $VERSION | cut -d. -f3)
+    NEW_PATCH=$((PATCH + 1))
+    NEW_TAG="v${MAJOR}.${MINOR}.${NEW_PATCH}"
+
+    echo "📈 Auto-incrementing to version: $NEW_TAG"
+else
+    # Manual version provided, check if it already exists
+    if git tag -l "$NEW_TAG" | grep -q "$NEW_TAG"; then
+        echo "❌ Tag $NEW_TAG already exists!"
+        exit 1
+    fi
 fi
-
-echo "📌 Latest tag: $LATEST_TAG"
-
-# Extract version components and increment patch
-VERSION=${LATEST_TAG#v}
-MAJOR=$(echo $VERSION | cut -d. -f1)
-MINOR=$(echo $VERSION | cut -d. -f2)
-PATCH=$(echo $VERSION | cut -d. -f3)
-NEW_PATCH=$((PATCH + 1))
-NEW_TAG="v${MAJOR}.${MINOR}.${NEW_PATCH}"
-
-echo "📈 New version: $NEW_TAG"
 
 # Step 4: Create and push new tag
 echo "🏷️ Creating tag $NEW_TAG..."
