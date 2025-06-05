@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"strings"
@@ -349,10 +350,26 @@ func (r *ProcessRegistry) killProcessesBySession(sessionID string) int {
 				}
 				tracker.Status = StatusKilled
 				killedCount++
+				
+				// Log session cleanup kill
+				logMsg := fmt.Sprintf("🧹 [SSE] Process killed (session cleanup): %s", tracker.Command)
+				if tracker.Name != "" {
+					logMsg += fmt.Sprintf(" (name: %s)", tracker.Name)
+				}
+				logMsg += fmt.Sprintf(" (PID: %d, ID: %s)", tracker.PID, tracker.ID)
+				log.Println(logMsg)
 			} else if tracker.Status == StatusPending {
 				// Cancel pending processes
 				tracker.Status = StatusKilled
 				killedCount++
+				
+				// Log cancelled pending process
+				logMsg := fmt.Sprintf("🚫 [SSE] Pending process cancelled (session cleanup): %s", tracker.Command)
+				if tracker.Name != "" {
+					logMsg += fmt.Sprintf(" (name: %s)", tracker.Name)
+				}
+				logMsg += fmt.Sprintf(" (ID: %s)", tracker.ID)
+				log.Println(logMsg)
 			}
 			tracker.Mutex.Unlock()
 		} else {
@@ -418,6 +435,24 @@ func executeDelayedProcess(ctx context.Context, tracker *ProcessTracker, envVars
 		tracker.PID = cmd.Process.Pid
 		tracker.StdinWriter = stdinPipe
 		tracker.Status = StatusRunning
+		
+		// Log process start (SSE mode only)
+		if globalSSEServer != nil {
+			logMsg := fmt.Sprintf("🚀 Process started: %s", tracker.Command)
+			if len(tracker.Args) > 0 {
+				logMsg += fmt.Sprintf(" %v", tracker.Args)
+			}
+			logMsg += fmt.Sprintf(" (PID: %d, ID: %s", tracker.PID, tracker.ID)
+			if tracker.Name != "" {
+				logMsg += fmt.Sprintf(", name: %s", tracker.Name)
+			}
+			if tracker.SessionID != "" {
+				logMsg += fmt.Sprintf(", session: %s", tracker.SessionID)
+			}
+			logMsg += ")"
+			log.Println(logMsg)
+		}
+		
 		tracker.Mutex.Unlock()
 
 		// Stream both stdout and stderr to the same buffer (chronological order preserved)
@@ -453,6 +488,24 @@ func executeDelayedProcess(ctx context.Context, tracker *ProcessTracker, envVars
 		tracker.PID = cmd.Process.Pid
 		tracker.StdinWriter = stdinPipe
 		tracker.Status = StatusRunning
+		
+		// Log process start (SSE mode only)
+		if globalSSEServer != nil {
+			logMsg := fmt.Sprintf("🚀 Process started: %s", tracker.Command)
+			if len(tracker.Args) > 0 {
+				logMsg += fmt.Sprintf(" %v", tracker.Args)
+			}
+			logMsg += fmt.Sprintf(" (PID: %d, ID: %s", tracker.PID, tracker.ID)
+			if tracker.Name != "" {
+				logMsg += fmt.Sprintf(", name: %s", tracker.Name)
+			}
+			if tracker.SessionID != "" {
+				logMsg += fmt.Sprintf(", session: %s", tracker.SessionID)
+			}
+			logMsg += ")"
+			log.Println(logMsg)
+		}
+		
 		tracker.Mutex.Unlock()
 
 		go streamToRingBuffer(stdoutPipe, tracker.StdoutBuffer)
@@ -480,6 +533,24 @@ func executeDelayedProcess(ctx context.Context, tracker *ProcessTracker, envVars
 			exitCode := 0
 			tracker.ExitCode = &exitCode
 			tracker.Status = StatusCompleted
+		}
+		
+		// Log process termination (SSE mode only)
+		if globalSSEServer != nil {
+			logMsg := fmt.Sprintf("💀 Process terminated: %s", tracker.Command)
+			if tracker.Name != "" {
+				logMsg += fmt.Sprintf(" (name: %s)", tracker.Name)
+			}
+			logMsg += fmt.Sprintf(" (PID: %d, ID: %s", tracker.PID, tracker.ID)
+			if tracker.ExitCode != nil {
+				logMsg += fmt.Sprintf(", exit code: %d", *tracker.ExitCode)
+			}
+			logMsg += fmt.Sprintf(", status: %s", tracker.Status)
+			if tracker.SessionID != "" {
+				logMsg += fmt.Sprintf(", session: %s", tracker.SessionID)
+			}
+			logMsg += ")"
+			log.Println(logMsg)
 		}
 	}()
 
@@ -1458,6 +1529,20 @@ func handleKillProcess(ctx context.Context, request mcp.CallToolRequest) (*mcp.C
 			}
 		}
 		tracker.Status = StatusKilled
+		
+		// Log manual kill (SSE mode only)
+		if globalSSEServer != nil {
+			logMsg := fmt.Sprintf("🔫 Process killed manually: %s", tracker.Command)
+			if tracker.Name != "" {
+				logMsg += fmt.Sprintf(" (name: %s)", tracker.Name)
+			}
+			logMsg += fmt.Sprintf(" (PID: %d, ID: %s", tracker.PID, processID)
+			if tracker.SessionID != "" {
+				logMsg += fmt.Sprintf(", session: %s", tracker.SessionID)
+			}
+			logMsg += ")"
+			log.Println(logMsg)
+		}
 	}
 
 	result := map[string]any{

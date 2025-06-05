@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"log"
 	"sync"
 
 	"github.com/mark3labs/mcp-go/server"
@@ -44,6 +45,11 @@ func (sm *SessionManager) CreateSession(sessionID string, ctx context.Context) *
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 	
+	// Check if session already exists
+	if _, exists := sm.sessions[sessionID]; exists {
+		return sm.sessions[sessionID]
+	}
+	
 	session := &Session{
 		ID:        sessionID,
 		Processes: []string{},
@@ -51,6 +57,7 @@ func (sm *SessionManager) CreateSession(sessionID string, ctx context.Context) *
 	}
 	
 	sm.sessions[sessionID] = session
+	log.Printf("🔗 [SSE] New session created: %s\n", sessionID)
 	return session
 }
 
@@ -70,6 +77,8 @@ func (sm *SessionManager) AddProcessToSession(sessionID, processID string, ctx c
 	
 	if session, exists := sm.sessions[sessionID]; exists {
 		session.Processes = append(session.Processes, processID)
+		log.Printf("🔧 [SSE] Process %s added to session %s (total: %d)\n", 
+			processID, sessionID, len(session.Processes))
 	} else {
 		// Create session if it doesn't exist (first process for this session)
 		session := &Session{
@@ -78,6 +87,7 @@ func (sm *SessionManager) AddProcessToSession(sessionID, processID string, ctx c
 			Context:   ctx,
 		}
 		sm.sessions[sessionID] = session
+		log.Printf("🔗 [SSE] New session %s created with first process %s\n", sessionID, processID)
 	}
 }
 

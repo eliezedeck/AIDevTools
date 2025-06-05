@@ -37,7 +37,6 @@ func StartSSEServer(mcpServer *server.MCPServer, config SSEServerConfig) error {
 	addr := fmt.Sprintf("%s:%s", config.Host, config.Port)
 	log.Printf("SSE server listening on %s\n", addr)
 	log.Printf("SSE endpoint: http://%s/mcp/sse\n", addr)
-	log.Printf("Message endpoint: http://%s/mcp/message\n", addr)
 	
 	// Create HTTP server
 	httpServer := &http.Server{
@@ -106,13 +105,15 @@ func monitorSSESessions() {
 
 // handleSessionClosed is called when an SSE session is closed
 func handleSessionClosed(sessionID string) {
-	log.Printf("Session %s closed, cleaning up processes...\n", sessionID)
+	log.Printf("🔌 [SSE] Session %s disconnected, cleaning up...\n", sessionID)
 	
 	// Kill all processes associated with this session
 	killedCount := registry.killProcessesBySession(sessionID)
 	
 	if killedCount > 0 {
-		log.Printf("Killed %d processes for session %s\n", killedCount, sessionID)
+		log.Printf("🧹 [SSE] Killed %d processes for disconnected session %s\n", killedCount, sessionID)
+	} else {
+		log.Printf("🧹 [SSE] No processes to clean up for session %s\n", sessionID)
 	}
 	
 	// Remove session from manager
