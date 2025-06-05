@@ -382,7 +382,8 @@ func (r *ProcessRegistry) killProcessesBySession(sessionID string) int {
 
 // executeDelayedProcess actually starts the process after any delay
 func executeDelayedProcess(ctx context.Context, tracker *ProcessTracker, envVars map[string]string) error {
-	cmd := exec.CommandContext(ctx, tracker.Command, tracker.Args...)
+	// Use background context for the process to avoid it being killed when request context is cancelled
+	cmd := exec.CommandContext(context.Background(), tracker.Command, tracker.Args...)
 	if tracker.WorkingDir != "" {
 		cmd.Dir = tracker.WorkingDir
 	}
