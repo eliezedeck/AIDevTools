@@ -591,10 +591,11 @@ We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) f
 
 ## 📊 Roadmap
 
-- [ ] **v0.2.0**: Web interface for process monitoring
-- [ ] **v0.3.0**: Process templates and saved configurations
-- [ ] **v0.4.0**: Distributed process management
-- [ ] **v0.5.0**: Plugin system for custom tools
+- [x] **v0.2.0**: SSE transport mode with session-based process lifecycle management
+- [ ] **v0.3.0**: Web interface for process monitoring
+- [ ] **v0.4.0**: Process templates and saved configurations
+- [ ] **v0.5.0**: Distributed process management
+- [ ] **v0.6.0**: Plugin system for custom tools
 
 ## 🤝 Support
 
