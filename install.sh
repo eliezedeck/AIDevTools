@@ -260,18 +260,26 @@ verify_installation() {
 check_existing() {
     if [[ -f "$INSTALL_DIR/$BINARY_NAME" ]]; then
         log_warning "Sidekick is already installed at $INSTALL_DIR/$BINARY_NAME"
-        echo -n "Do you want to reinstall/update? [y/N]: "
-        read -r response
-        case "$response" in
-            [yY][eE][sS]|[yY]) 
-                log_info "Proceeding with reinstallation..."
-                return 0
-                ;;
-            *)
-                log_info "Installation cancelled."
-                exit 0
-                ;;
-        esac
+        
+        # Check if we can read from terminal (not piped)
+        if [[ -t 0 ]]; then
+            echo -n "Do you want to reinstall/update? [y/N]: "
+            read -r response
+            case "$response" in
+                [yY][eE][sS]|[yY]) 
+                    log_info "Proceeding with reinstallation..."
+                    return 0
+                    ;;
+                *)
+                    log_info "Installation cancelled."
+                    exit 0
+                    ;;
+            esac
+        else
+            # Non-interactive mode (piped script) - default to yes for reinstall
+            log_info "Non-interactive mode detected. Proceeding with reinstallation..."
+            return 0
+        fi
     fi
 }
 
