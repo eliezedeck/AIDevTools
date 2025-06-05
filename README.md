@@ -107,6 +107,9 @@ claude mcp list
 ```bash
 # Download and install in one command
 curl -sSL https://raw.githubusercontent.com/eliezedeck/AIDevTools/main/install.sh | bash
+
+# Force build from source (useful for development or custom builds)
+curl -sSL https://raw.githubusercontent.com/eliezedeck/AIDevTools/main/install.sh | bash -s -- --force-build-from-source
 ```
 
 ### Option 2: Manual Installation

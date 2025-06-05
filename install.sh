@@ -3,6 +3,8 @@
 # AIDevTools Sidekick Installation Script
 # Downloads and installs the latest sidekick binary from GitHub releases
 # Usage: curl -sSL https://raw.githubusercontent.com/eliezedeck/AIDevTools/main/install.sh | bash
+# Options:
+#   --force-build-from-source    Build from source instead of downloading pre-built binary
 
 set -e
 
@@ -12,6 +14,20 @@ BINARY_NAME="sidekick"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
 GITHUB_API="https://api.github.com/repos/$REPO"
 GITHUB_RELEASES="https://github.com/$REPO/releases"
+
+# Parse command line arguments
+FORCE_BUILD=false
+for arg in "$@"; do
+    case $arg in
+        --force-build-from-source)
+            FORCE_BUILD=true
+            shift
+            ;;
+        *)
+            # Unknown option
+            ;;
+    esac
+done
 
 # Colors for output
 RED='\033[0;31m'
@@ -295,13 +311,19 @@ main() {
     # Detect platform
     detect_platform
     
-    # Get latest version
-    get_latest_version
-    
-    # Try to download binary, fallback to building from source
-    if ! download_binary; then
-        log_warning "Failed to download pre-built binary"
+    # Check if force build is requested
+    if [[ "$FORCE_BUILD" == "true" ]]; then
+        log_info "Force build from source requested"
         build_from_source
+    else
+        # Get latest version
+        get_latest_version
+        
+        # Try to download binary, fallback to building from source
+        if ! download_binary; then
+            log_warning "Failed to download pre-built binary"
+            build_from_source
+        fi
     fi
     
     # Verify installation
