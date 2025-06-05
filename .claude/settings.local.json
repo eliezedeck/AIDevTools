@@ -25,7 +25,8 @@
       "Bash(make:*)",
       "WebFetch(domain:modelcontextprotocol.io)",
       "WebFetch(domain:github.com)",
-      "Bash(./sidekick --help)"
+      "Bash(./sidekick --help)",
+      "Bash(go vet:*)"
     ],
     "deny": []
   }

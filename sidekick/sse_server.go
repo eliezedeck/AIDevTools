@@ -25,11 +25,13 @@ func StartSSEServer(mcpServer *server.MCPServer, config SSEServerConfig) error {
 		server.WithBaseURL(fmt.Sprintf("http://%s:%s", config.Host, config.Port)),
 		server.WithStaticBasePath("/mcp"),
 		server.WithKeepAlive(true),
-		// TODO: Add session closed handler when available in mark3labs/mcp-go
 	)
 	
 	// Store SSE server globally for session tracking
 	globalSSEServer = sseServer
+	
+	// Start session monitor goroutine
+	go monitorSSESessions()
 	
 	// Start HTTP server
 	addr := fmt.Sprintf("%s:%s", config.Host, config.Port)
@@ -75,6 +77,33 @@ func StartSSEServer(mcpServer *server.MCPServer, config SSEServerConfig) error {
 	}
 }
 
+// monitorSSESessions periodically checks for closed sessions and cleans up their processes
+func monitorSSESessions() {
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+	
+	for {
+		select {
+		case <-ticker.C:
+			// Check each tracked session to see if it's still active
+			sessions := sessionManager.GetAllSessions()
+			for sessionID, session := range sessions {
+				// If the session's context is done, it means the session is closed
+				select {
+				case <-session.Context.Done():
+					// Session is closed, trigger cleanup
+					handleSessionClosed(sessionID)
+				default:
+					// Session is still active
+				}
+			}
+		case <-shutdownChan:
+			// Server is shutting down
+			return
+		}
+	}
+}
+
 // handleSessionClosed is called when an SSE session is closed
 func handleSessionClosed(sessionID string) {
 	log.Printf("Session %s closed, cleaning up processes...\n", sessionID)
@@ -85,4 +114,7 @@ func handleSessionClosed(sessionID string) {
 	if killedCount > 0 {
 		log.Printf("Killed %d processes for session %s\n", killedCount, sessionID)
 	}
+	
+	// Remove session from manager
+	sessionManager.RemoveSession(sessionID)
 }

@@ -289,11 +289,6 @@ func (r *ProcessRegistry) addProcess(tracker *ProcessTracker) {
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
 	r.processes[tracker.ID] = tracker
-	
-	// Add to session manager if in SSE mode
-	if tracker.SessionID != "" && sessionManager != nil {
-		sessionManager.AddProcessToSession(tracker.SessionID, tracker.ID)
-	}
 }
 
 func (r *ProcessRegistry) getProcess(id string) (*ProcessTracker, bool) {
@@ -360,11 +355,6 @@ func (r *ProcessRegistry) killProcessesBySession(sessionID string) int {
 				killedCount++
 			}
 			tracker.Mutex.Unlock()
-			
-			// Remove from session manager
-			if sessionManager != nil {
-				sessionManager.RemoveSession(sessionID)
-			}
 		} else {
 			tracker.Mutex.RUnlock()
 		}
@@ -589,8 +579,8 @@ func handleSpawnProcess(ctx context.Context, request mcp.CallToolRequest) (*mcp.
 		}
 	}
 
-	// Extract session ID from request context (for SSE mode)
-	sessionID := ExtractSessionFromRequest(request)
+	// Extract session ID from context (for SSE mode)
+	sessionID := ExtractSessionFromContext(ctx)
 	
 	processID := uuid.New().String()
 	tracker := &ProcessTracker{
@@ -628,6 +618,11 @@ func handleSpawnProcess(ctx context.Context, request mcp.CallToolRequest) (*mcp.
 			}
 
 			registry.addProcess(tracker)
+			
+			// Add to session manager if in SSE mode
+			if sessionID != "" && sessionManager != nil {
+				sessionManager.AddProcessToSession(sessionID, processID, ctx)
+			}
 
 			result = map[string]any{
 				"process_id": processID,
@@ -639,6 +634,11 @@ func handleSpawnProcess(ctx context.Context, request mcp.CallToolRequest) (*mcp.
 			// Async mode: set pending status, register immediately, start background delay
 			tracker.Status = StatusPending
 			registry.addProcess(tracker)
+			
+			// Add to session manager if in SSE mode
+			if sessionID != "" && sessionManager != nil {
+				sessionManager.AddProcessToSession(sessionID, processID, ctx)
+			}
 
 			// Start background goroutine to wait and then execute
 			go func() {
@@ -660,6 +660,11 @@ func handleSpawnProcess(ctx context.Context, request mcp.CallToolRequest) (*mcp.
 		}
 
 		registry.addProcess(tracker)
+		
+		// Add to session manager if in SSE mode
+		if sessionID != "" && sessionManager != nil {
+			sessionManager.AddProcessToSession(sessionID, processID, ctx)
+		}
 
 		result = map[string]any{
 			"process_id": processID,
@@ -784,8 +789,8 @@ func handleSpawnMultipleProcesses(ctx context.Context, request mcp.CallToolReque
 		// Create tracker
 		processID := uuid.New().String()
 		
-		// Extract session ID from request context (for SSE mode)
-		sessionID := ExtractSessionFromRequest(request)
+		// Extract session ID from context (for SSE mode)
+		sessionID := ExtractSessionFromContext(ctx)
 		
 		tracker := &ProcessTracker{
 			ID:            processID,
@@ -816,6 +821,11 @@ func handleSpawnMultipleProcesses(ctx context.Context, request mcp.CallToolReque
 			deferredMode = true
 			tracker.Status = StatusPending
 			registry.addProcess(tracker)
+			
+			// Add to session manager if in SSE mode
+			if sessionID != "" && sessionManager != nil {
+				sessionManager.AddProcessToSession(sessionID, processID, ctx)
+			}
 
 			deferredProcesses = append(deferredProcesses, processInfo{
 				index:     i,
@@ -851,6 +861,11 @@ func handleSpawnMultipleProcesses(ctx context.Context, request mcp.CallToolReque
 			}
 
 			registry.addProcess(tracker)
+			
+			// Add to session manager if in SSE mode
+			if sessionID != "" && sessionManager != nil {
+				sessionManager.AddProcessToSession(sessionID, processID, ctx)
+			}
 
 			results = append(results, map[string]any{
 				"index":      i,

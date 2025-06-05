@@ -4,7 +4,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/mark3labs/mcp-go/server"
 )
 
 // SessionManager manages session-to-process mapping for SSE connections
@@ -64,12 +64,20 @@ func (sm *SessionManager) GetSession(sessionID string) (*Session, bool) {
 }
 
 // AddProcessToSession associates a process with a session
-func (sm *SessionManager) AddProcessToSession(sessionID, processID string) {
+func (sm *SessionManager) AddProcessToSession(sessionID, processID string, ctx context.Context) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 	
 	if session, exists := sm.sessions[sessionID]; exists {
 		session.Processes = append(session.Processes, processID)
+	} else {
+		// Create session if it doesn't exist (first process for this session)
+		session := &Session{
+			ID:        sessionID,
+			Processes: []string{processID},
+			Context:   ctx,
+		}
+		sm.sessions[sessionID] = session
 	}
 }
 
@@ -102,17 +110,32 @@ func (sm *SessionManager) GetProcessesBySession(sessionID string) []string {
 	return []string{}
 }
 
-// ExtractSessionFromRequest extracts session ID from an MCP request context
-func ExtractSessionFromRequest(request mcp.CallToolRequest) string {
+// GetAllSessions returns a copy of all active sessions
+func (sm *SessionManager) GetAllSessions() map[string]*Session {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	
+	// Create a copy to prevent external modification
+	sessions := make(map[string]*Session)
+	for id, session := range sm.sessions {
+		sessions[id] = session
+	}
+	
+	return sessions
+}
+
+// ExtractSessionFromContext extracts session ID from the context
+func ExtractSessionFromContext(ctx context.Context) string {
 	// Check if we're in SSE mode
 	if globalSSEServer == nil {
 		return "" // stdio mode, no session
 	}
 	
-	// In SSE mode, the session ID should be available through the server's context
-	// For now, return empty string as we need to investigate how mark3labs/mcp-go
-	// passes session context to tool handlers
-	// TODO: Extract session ID from SSE context when available
+	// Extract session from context using mark3labs/mcp-go method
+	session := server.ClientSessionFromContext(ctx)
+	if session != nil {
+		return session.SessionID()
+	}
 	
 	return ""
 }
