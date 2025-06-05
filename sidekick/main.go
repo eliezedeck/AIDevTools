@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"log"
 	"os"
 	"os/signal"
 	"runtime"
@@ -16,9 +17,18 @@ import (
 // Version can be set at build time using -ldflags "-X main.version=x.x.x"
 var version = "dev"
 
+// Global SSE server reference for session tracking
+var globalSSEServer *server.SSEServer
+
+// Shutdown channel for coordinated shutdown
+var shutdownChan = make(chan struct{})
+
 func main() {
-	// Handle --version flag
+	// Handle command-line flags
 	versionFlag := flag.Bool("version", false, "Print version and exit")
+	sseMode := flag.Bool("sse", false, "Run in SSE mode instead of stdio")
+	port := flag.String("port", "8080", "Port for SSE server (default: 8080)")
+	host := flag.String("host", "localhost", "Host for SSE server (default: localhost)")
 	flag.Parse()
 
 	if *versionFlag {
@@ -193,9 +203,32 @@ func main() {
 		os.Exit(0)
 	}()
 
-	// 🚦 Start the MCP server over stdio
-	if err := server.ServeStdio(s); err != nil {
-		fmt.Printf("Server error: %v\n", err)
+	// 🚦 Start the MCP server
+	if *sseMode {
+		// SSE mode
+		config := SSEServerConfig{
+			Host: *host,
+			Port: *port,
+		}
+		
+		// Handle shutdown in a separate goroutine
+		go func() {
+			<-sigChan
+			close(shutdownChan)
+			time.Sleep(100 * time.Millisecond) // Give SSE server time to shutdown
+			handleGracefulShutdown()
+			os.Exit(0)
+		}()
+		
+		// Start SSE server (blocks until shutdown)
+		if err := StartSSEServer(s, config); err != nil {
+			log.Fatalf("Failed to start SSE server: %v\n", err)
+		}
+	} else {
+		// Stdio mode (default)
+		if err := server.ServeStdio(s); err != nil {
+			fmt.Printf("Server error: %v\n", err)
+		}
 	}
 }
 

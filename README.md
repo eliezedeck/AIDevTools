@@ -57,6 +57,12 @@ Built specifically for [Claude Code](https://claude.ai/code) and other MCP-compa
 - **Smart Delays**: Async/sync process spawning with configurable delays
 - **Batch Operations**: Launch multiple processes with individual configurations
 
+### 🌐 **Transport Modes**
+- **Stdio Transport**: Traditional MCP server mode for Claude Code
+- **SSE Transport**: HTTP-based Server-Sent Events for web clients
+- **Session Management**: Automatic process cleanup on client disconnect
+- **Multi-client Support**: Each SSE client gets isolated process space
+
 ### 📢 **Audio Notifications** *(macOS Only)*
 - **System Integration**: Native `afplay` and `say` command integration
 - **Concurrent Playback**: Non-blocking audio and speech synthesis
@@ -149,7 +155,12 @@ go install github.com/eliezedeck/AIDevTools/sidekick@latest
 
 ## ⚙️ Configuration
 
-### Claude Code Integration
+### Running Modes
+
+Sidekick supports two transport modes:
+
+#### 1. **Stdio Mode** (Default)
+Traditional MCP server mode, perfect for Claude Code integration.
 
 ```bash
 # Basic setup
@@ -161,6 +172,27 @@ claude mcp add sidekick -e SIDEKICK_BUFFER_SIZE=20971520 sidekick
 # With custom scope (if needed)
 claude mcp add sidekick --scope filesystem sidekick
 ```
+
+#### 2. **SSE Mode** (Server-Sent Events)
+HTTP-based transport with session management for web-based AI clients.
+
+```bash
+# Start SSE server
+sidekick --sse
+
+# Custom host and port
+sidekick --sse --host 0.0.0.0 --port 3000
+
+# SSE endpoints:
+# - SSE stream: http://localhost:8080/mcp/sse
+# - Messages: http://localhost:8080/mcp/message
+```
+
+**SSE Mode Features:**
+- 🔐 **Session Management**: Each client connection gets a unique session
+- 🧹 **Auto-cleanup**: Processes are automatically killed when client disconnects
+- 🌐 **HTTP Transport**: Works with web-based AI agents and custom integrations
+- 📡 **Real-time Updates**: Server-Sent Events for streaming process output
 
 ### Environment Variables
 
@@ -422,6 +454,45 @@ const output = await mcp.call("get_partial_process_output", {
 // Notify when task completes
 await mcp.call("notifications_speak", {
   text: "Database migration completed successfully"
+});
+```
+
+### SSE Mode Integration
+
+```javascript
+// Connect to SSE server
+const eventSource = new EventSource('http://localhost:8080/mcp/sse');
+const sessionId = null;
+
+eventSource.onmessage = (event) => {
+  const message = JSON.parse(event.data);
+  if (message.endpoint) {
+    sessionId = message.endpoint.split('/').pop();
+  }
+};
+
+// Send MCP request
+async function callTool(method, params) {
+  const response = await fetch('http://localhost:8080/mcp/message', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: Date.now(),
+      method: method,
+      params: params
+    })
+  });
+  return response.json();
+}
+
+// Spawn a process (will be auto-cleaned on disconnect)
+const result = await callTool('tools/call', {
+  name: 'spawn_process',
+  arguments: {
+    command: 'npm',
+    args: ['run', 'dev']
+  }
 });
 ```
 

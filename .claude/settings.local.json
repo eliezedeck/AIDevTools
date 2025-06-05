@@ -22,7 +22,10 @@
       "Bash(grep:*)",
       "Bash(ls:*)",
       "Bash(make test:*)",
-      "Bash(make:*)"
+      "Bash(make:*)",
+      "WebFetch(domain:modelcontextprotocol.io)",
+      "WebFetch(domain:github.com)",
+      "Bash(./sidekick --help)"
     ],
     "deny": []
   }

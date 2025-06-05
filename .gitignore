@@ -6,3 +6,6 @@ CLAUDE.local.md
 
 # Local development commands
 .claude/commands/
+
+# Test files
+sidekick/test_sse.html

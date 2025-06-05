@@ -29,6 +29,7 @@ const (
 type ProcessTracker struct {
 	ID            string         `json:"id"`
 	Name          string         `json:"name,omitempty"`
+	SessionID     string         `json:"session_id,omitempty"` // SSE session that owns this process
 	PID           int            `json:"pid"`
 	Command       string         `json:"command"`
 	Args          []string       `json:"args"`
@@ -288,6 +289,11 @@ func (r *ProcessRegistry) addProcess(tracker *ProcessTracker) {
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
 	r.processes[tracker.ID] = tracker
+	
+	// Add to session manager if in SSE mode
+	if tracker.SessionID != "" && sessionManager != nil {
+		sessionManager.AddProcessToSession(tracker.SessionID, tracker.ID)
+	}
 }
 
 func (r *ProcessRegistry) getProcess(id string) (*ProcessTracker, bool) {
@@ -323,6 +329,48 @@ func (r *ProcessRegistry) removeProcess(id string) {
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
 	delete(r.processes, id)
+}
+
+// killProcessesBySession kills all processes associated with a session
+func (r *ProcessRegistry) killProcessesBySession(sessionID string) int {
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
+	
+	killedCount := 0
+	for _, tracker := range r.processes {
+		tracker.Mutex.RLock()
+		if tracker.SessionID == sessionID && 
+			(tracker.Status == StatusRunning || tracker.Status == StatusPending) {
+			tracker.Mutex.RUnlock()
+			
+			// Kill the process
+			tracker.Mutex.Lock()
+			if tracker.Process != nil && tracker.Process.Process != nil {
+				// Try graceful termination first
+				err := terminateProcessGroup(tracker.Process.Process.Pid)
+				if err != nil {
+					// Fallback to standard kill
+					_ = tracker.Process.Process.Kill()
+				}
+				tracker.Status = StatusKilled
+				killedCount++
+			} else if tracker.Status == StatusPending {
+				// Cancel pending processes
+				tracker.Status = StatusKilled
+				killedCount++
+			}
+			tracker.Mutex.Unlock()
+			
+			// Remove from session manager
+			if sessionManager != nil {
+				sessionManager.RemoveSession(sessionID)
+			}
+		} else {
+			tracker.Mutex.RUnlock()
+		}
+	}
+	
+	return killedCount
 }
 
 // executeDelayedProcess actually starts the process after any delay
@@ -541,10 +589,14 @@ func handleSpawnProcess(ctx context.Context, request mcp.CallToolRequest) (*mcp.
 		}
 	}
 
+	// Extract session ID from request context (for SSE mode)
+	sessionID := ExtractSessionFromRequest(request)
+	
 	processID := uuid.New().String()
 	tracker := &ProcessTracker{
 		ID:            processID,
 		Name:          name,
+		SessionID:     sessionID,
 		Command:       command,
 		Args:          args,
 		WorkingDir:    workingDir,
@@ -731,9 +783,14 @@ func handleSpawnMultipleProcesses(ctx context.Context, request mcp.CallToolReque
 
 		// Create tracker
 		processID := uuid.New().String()
+		
+		// Extract session ID from request context (for SSE mode)
+		sessionID := ExtractSessionFromRequest(request)
+		
 		tracker := &ProcessTracker{
 			ID:            processID,
 			Name:          name,
+			SessionID:     sessionID,
 			Command:       command,
 			Args:          args,
 			WorkingDir:    workingDir,
