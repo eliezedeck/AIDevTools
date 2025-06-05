@@ -26,7 +26,8 @@
       "WebFetch(domain:modelcontextprotocol.io)",
       "WebFetch(domain:github.com)",
       "Bash(./sidekick --help)",
-      "Bash(go vet:*)"
+      "Bash(go vet:*)",
+      "Bash(curl:*)"
     ],
     "deny": []
   }
