@@ -1265,6 +1265,16 @@ func handleSendProcessInput(ctx context.Context, request mcp.CallToolRequest) (*
 		return mcp.NewToolResultError("Missing or invalid 'input' argument"), nil
 	}
 
+	// Extract auto_newline parameter (defaults to true)
+	autoNewline := true
+	if arguments, ok := request.Params.Arguments.(map[string]any); ok {
+		if an, exists := arguments["auto_newline"]; exists {
+			if anBool, ok := an.(bool); ok {
+				autoNewline = anBool
+			}
+		}
+	}
+
 	tracker, exists := registry.getProcess(processID)
 	if !exists {
 		return mcp.NewToolResultError(fmt.Sprintf("Process %s not found", processID)), nil
@@ -1281,15 +1291,30 @@ func handleSendProcessInput(ctx context.Context, request mcp.CallToolRequest) (*
 		return mcp.NewToolResultError("Process stdin is not available"), nil
 	}
 
-	_, err = tracker.StdinWriter.Write([]byte(input))
+	// Prepare the final input to send
+	finalInput := input
+	if autoNewline {
+		finalInput = input + "\n"
+	}
+
+	_, err = tracker.StdinWriter.Write([]byte(finalInput))
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("Failed to write to process stdin: %v", err)), nil
 	}
 
+	// Prepare result message
+	message := fmt.Sprintf("Sent %d bytes to process stdin", len(finalInput))
+	if autoNewline {
+		message += " (with newline)"
+	}
+
 	result := map[string]any{
-		"process_id": processID,
-		"status":     "input_sent",
-		"message":    fmt.Sprintf("Sent %d bytes to process stdin", len(input)),
+		"process_id":    processID,
+		"status":        "input_sent",
+		"message":       message,
+		"auto_newline":  autoNewline,
+		"bytes_sent":    len(finalInput),
+		"original_size": len(input),
 	}
 
 	resultBytes, _ := json.Marshal(result)

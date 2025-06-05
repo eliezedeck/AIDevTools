@@ -19,7 +19,10 @@
       "mcp__sidekick__get_partial_process_output",
       "mcp__sidekick__kill_process",
       "Bash(go test:*)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "Bash(ls:*)",
+      "Bash(make test:*)",
+      "Bash(make:*)"
     ],
     "deny": []
   }

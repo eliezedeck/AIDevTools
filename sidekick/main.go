@@ -135,6 +135,9 @@ func main() {
 			mcp.Required(),
 			mcp.Description("Input data to send to process stdin"),
 		),
+		mcp.WithBoolean("auto_newline",
+			mcp.Description("Automatically append newline character to input (default: true)"),
+		),
 	)
 
 	listProcessesTool := mcp.NewTool(
