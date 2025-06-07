@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"sync"
 	"syscall"
 	"time"
 
@@ -22,11 +23,13 @@ var globalSSEServer *server.SSEServer
 
 // Shutdown channel for coordinated shutdown
 var shutdownChan = make(chan struct{})
+var shutdownOnce sync.Once
 
 func main() {
 	// Handle command-line flags
 	versionFlag := flag.Bool("version", false, "Print version and exit")
 	sseMode := flag.Bool("sse", false, "Run in SSE mode instead of stdio")
+	tuiMode := flag.Bool("tui", false, "Enable TUI mode (only available with --sse)")
 	port := flag.String("port", "8080", "Port for SSE server (default: 8080)")
 	host := flag.String("host", "localhost", "Host for SSE server (default: localhost)")
 	flag.Parse()
@@ -34,6 +37,12 @@ func main() {
 	if *versionFlag {
 		fmt.Printf("sidekick %s\n", version)
 		os.Exit(0)
+	}
+
+	// Validate flags
+	if *tuiMode && !*sseMode {
+		fmt.Println("Error: TUI mode (--tui) is only available with SSE mode (--sse)")
+		os.Exit(1)
 	}
 
 	// 🛠️ Create a new MCP server
@@ -211,10 +220,33 @@ func main() {
 			Port: *port,
 		}
 		
+		// Start TUI if requested
+		var tuiManager *TUIManager
+		if *tuiMode {
+			tuiManager = NewTUIManager()
+			go func() {
+				// Small delay to ensure SSE server is started first
+				time.Sleep(200 * time.Millisecond)
+				if err := tuiManager.Start(); err != nil {
+					log.Printf("TUI error: %v", err)
+				}
+				// TUI has exited, trigger shutdown of entire application
+				log.Println("TUI exited, shutting down sidekick...")
+				shutdownOnce.Do(func() {
+					close(shutdownChan)
+				})
+			}()
+		}
+		
 		// Handle shutdown in a separate goroutine
 		go func() {
 			<-sigChan
-			close(shutdownChan)
+			shutdownOnce.Do(func() {
+				close(shutdownChan)
+			})
+			if tuiManager != nil {
+				tuiManager.Stop()
+			}
 			time.Sleep(100 * time.Millisecond) // Give SSE server time to shutdown
 			handleGracefulShutdown()
 			os.Exit(0)

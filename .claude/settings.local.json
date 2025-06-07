@@ -27,7 +27,11 @@
       "WebFetch(domain:github.com)",
       "Bash(./sidekick --help)",
       "Bash(go vet:*)",
-      "Bash(curl:*)"
+      "Bash(curl:*)",
+      "Bash(go get:*)",
+      "Bash(timeout:*)",
+      "Bash(rm:*)",
+      "Bash(pkill:*)"
     ],
     "deny": []
   }
