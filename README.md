@@ -87,6 +87,13 @@ claude mcp list
 - **Session Management**: Automatic process cleanup on client disconnect
 - **Multi-client Support**: Each SSE client gets isolated process space
 
+### 🖥️ **Terminal User Interface** *(v0.3.0+)*
+- **Process Monitoring**: Real-time hierarchical tree view of all processes
+- **Interactive Control**: Kill processes, send input, view detailed output
+- **Notifications Panel**: View and manage notification history
+- **Graceful Shutdown**: Visual progress during 3-second termination period
+- **Keyboard Navigation**: Efficient control with hotkeys and shortcuts
+
 ### 📢 **Audio Notifications** *(macOS Only)*
 - **System Integration**: Native `afplay` and `say` command integration
 - **Concurrent Playback**: Non-blocking audio and speech synthesis
@@ -184,6 +191,9 @@ sidekick --sse
 # Custom host and port
 sidekick --sse --host 0.0.0.0 --port 3000
 
+# With Terminal UI (v0.3.0+)
+sidekick --sse --tui
+
 # SSE endpoints:
 # - SSE stream: http://localhost:8080/mcp/sse
 # - Messages: http://localhost:8080/mcp/message
@@ -194,6 +204,7 @@ sidekick --sse --host 0.0.0.0 --port 3000
 - 🧹 **Auto-cleanup**: Processes are automatically killed when client disconnects
 - 🌐 **HTTP Transport**: Works with web-based AI agents and custom integrations
 - 📡 **Real-time Updates**: Server-Sent Events for streaming process output
+- 🖥️ **Optional TUI**: Enable with `--tui` flag for visual process management
 
 ### Environment Variables
 
@@ -375,6 +386,30 @@ Play system sound and speak text using macOS TTS.
 
 **Parameters:**
 - `text` *(required)*: Text to speak (max 50 words)
+
+### Terminal User Interface (TUI)
+
+The TUI mode provides a visual interface for managing processes:
+
+```bash
+# Start Sidekick with TUI
+sidekick --sse --tui
+```
+
+**TUI Features:**
+- **Process Tree View**: Hierarchical display organized by session
+- **Real-time Updates**: Live process status and output monitoring  
+- **Keyboard Navigation**:
+  - `Tab`/`Shift+Tab`: Switch between panels
+  - `↑`/`↓`: Navigate process list
+  - `Enter`: View process details
+  - `k`: Kill selected process
+  - `1`: Switch to Processes page
+  - `2`: Switch to Notifications page
+  - `Q`: Quit (with confirmation)
+- **Process Details**: View stdout/stderr, send input, monitor status
+- **Notifications Panel**: History of all audio notifications (macOS)
+- **Graceful Shutdown**: Visual countdown when terminating processes
 
 ## 💡 Examples
 
@@ -592,7 +627,7 @@ We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) f
 ## 📊 Roadmap
 
 - [x] **v0.2.0**: SSE transport mode with session-based process lifecycle management
-- [ ] **v0.3.0**: Web interface for process monitoring
+- [x] **v0.3.0**: Terminal User Interface (TUI) with process monitoring and control
 - [ ] **v0.4.0**: Process templates and saved configurations
 - [ ] **v0.5.0**: Distributed process management
 - [ ] **v0.6.0**: Plugin system for custom tools
