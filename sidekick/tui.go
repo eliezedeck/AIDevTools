@@ -89,7 +89,8 @@ func (t *TUIApp) handleGlobalKeys(event *tcell.EventKey) *tcell.EventKey {
 			t.SwitchToPage(NotificationsPage)
 			return nil
 		case 'q', 'Q':
-			// Quit application
+			// Quit application - mark TUI as inactive immediately
+			setTUIActive(false)
 			t.Stop()
 			return nil
 		}

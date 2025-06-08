@@ -247,9 +247,12 @@ var (
 	}
 	cleanupInterval = 15 * time.Minute
 	processTimeout  = 1 * time.Hour
+	cleanupCtx      context.Context
+	cleanupCancel   context.CancelFunc
 )
 
 func init() {
+	cleanupCtx, cleanupCancel = context.WithCancel(context.Background())
 	go startCleanupRoutine()
 }
 
@@ -257,8 +260,20 @@ func startCleanupRoutine() {
 	ticker := time.NewTicker(cleanupInterval)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		cleanupStaleProcesses()
+	for {
+		select {
+		case <-ticker.C:
+			cleanupStaleProcesses()
+		case <-cleanupCtx.Done():
+			return
+		}
+	}
+}
+
+// StopCleanupRoutine stops the background cleanup goroutine
+func StopCleanupRoutine() {
+	if cleanupCancel != nil {
+		cleanupCancel()
 	}
 }
 

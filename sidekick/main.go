@@ -232,12 +232,7 @@ func main() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
-	// Handle signals in a goroutine
-	go func() {
-		<-sigChan
-		handleGracefulShutdown()
-		os.Exit(0)
-	}()
+	// Signal handling is done inside each mode (SSE or stdio)
 
 	// 🚦 Start the MCP server
 	if *sseMode {
@@ -270,33 +265,77 @@ func main() {
 		
 		// Handle shutdown in a separate goroutine
 		go func() {
-			<-sigChan
-			shutdownOnce.Do(func() {
-				close(shutdownChan)
-			})
-			if tuiManager != nil {
-				tuiManager.Stop()
+			select {
+			case <-sigChan:
+				// Handle OS signal (Ctrl+C)
+				shutdownOnce.Do(func() {
+					close(shutdownChan)
+				})
+				if tuiManager != nil {
+					tuiManager.Stop()
+				}
+			case <-shutdownChan:
+				// Shutdown already initiated (e.g., from TUI exit)
+				// Just return to let this goroutine exit
+				return
 			}
-			time.Sleep(100 * time.Millisecond) // Give SSE server time to shutdown
-			handleGracefulShutdown()
-			os.Exit(0)
 		}()
 		
 		// Start SSE server (blocks until shutdown)
 		if err := StartSSEServer(s, config); err != nil {
 			log.Fatalf("Failed to start SSE server: %v\n", err)
 		}
+		
+		// SSE server has shut down - exit immediately
+		// In TUI mode, processes were already force killed
+		// In non-TUI mode, graceful shutdown was attempted
+		os.Exit(0)
 	} else {
 		// Stdio mode (default)
+		// Handle signals for stdio mode
+		go func() {
+			<-sigChan
+			handleGracefulShutdown()
+			os.Exit(0)
+		}()
+		
 		if err := server.ServeStdio(s); err != nil {
 			fmt.Printf("Server error: %v\n", err)
 		}
 	}
 }
 
+// handleAggressiveShutdown immediately kills all processes without waiting
+func handleAggressiveShutdown() {
+	// Stop the cleanup routine first
+	StopCleanupRoutine()
+	
+	// Get all tracked processes
+	processes := registry.getAllProcesses()
+	
+	// Immediately force kill all running processes
+	for _, tracker := range processes {
+		tracker.Mutex.Lock()
+		if tracker.Process != nil && tracker.Process.Process != nil &&
+			(tracker.Status == StatusRunning || tracker.Status == StatusPending) {
+			// Force kill the entire process group (Unix) or process (Windows)
+			err := forceKillProcessGroup(tracker.Process.Process.Pid)
+			if err != nil {
+				// If platform-specific force kill fails, use standard process.Kill()
+				_ = tracker.Process.Process.Kill()
+			}
+			tracker.Status = StatusKilled
+		}
+		tracker.Mutex.Unlock()
+	}
+}
+
 // handleGracefulShutdown sends SIGTERM to all running processes, waits up to 5 seconds,
 // then sends SIGKILL to any remaining processes
 func handleGracefulShutdown() {
+	// Stop the cleanup routine first
+	StopCleanupRoutine()
+	
 	// Get all tracked processes
 	processes := registry.getAllProcesses()
 

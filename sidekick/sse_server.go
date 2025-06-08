@@ -60,20 +60,45 @@ func StartSSEServer(mcpServer *server.MCPServer, config SSEServerConfig) error {
 	case <-shutdownChan:
 		logIfNotTUI("Shutting down SSE server...")
 
-		// Shutdown SSE server first (kills all session processes)
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
+		// If TUI is active, use aggressive shutdown for immediate exit
+		if isTUIActiveCheck() {
+			// Aggressive shutdown for TUI mode - kill everything immediately (synchronously)
+			handleAggressiveShutdown()
+			
+			// Immediately close the HTTP server
+			httpServer.Close()
+			
+			// No graceful shutdown attempts in TUI mode
+			return nil
+		} else {
+			// Normal graceful shutdown for non-TUI mode
+			go handleGracefulShutdown()
 
-		if err := sseServer.Shutdown(ctx); err != nil {
-			logIfNotTUI("SSE server shutdown error: %v", err)
+			// Immediately disable keep-alives and stop accepting new connections
+			httpServer.SetKeepAlivesEnabled(false)
+			
+			// Force close all active connections after a short grace period
+			go func() {
+				time.Sleep(1 * time.Second)
+				httpServer.Close()
+			}()
+
+			// Try graceful shutdown with very short timeout
+			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer shutdownCancel()
+			
+			// Shutdown SSE server first
+			if err := sseServer.Shutdown(shutdownCtx); err != nil {
+				logIfNotTUI("SSE server shutdown error: %v", err)
+			}
+			
+			// Then shutdown HTTP server (will likely be already closed by force close)
+			if err := httpServer.Shutdown(shutdownCtx); err != nil && err != http.ErrServerClosed {
+				logIfNotTUI("HTTP server shutdown error: %v", err)
+			}
+
+			return nil
 		}
-
-		// Then shutdown HTTP server
-		if err := httpServer.Shutdown(ctx); err != nil {
-			logIfNotTUI("HTTP server shutdown error: %v", err)
-		}
-
-		return nil
 	}
 }
 
