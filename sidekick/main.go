@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
@@ -75,11 +76,19 @@ func main() {
 		os.Exit(1)
 	}
 
+	// 🛠️ Create hooks for session lifecycle management
+	hooks := &server.Hooks{}
+	hooks.AddOnUnregisterSession(func(ctx context.Context, session server.ClientSession) {
+		sessionID := session.SessionID()
+		handleSessionClosed(sessionID)
+	})
+
 	// 🛠️ Create a new MCP server
 	s := server.NewMCPServer(
 		"Sidekick Notifications",
 		"1.0.0",
 		server.WithToolCapabilities(false),
+		server.WithHooks(hooks),
 	)
 
 	// 🗣️ Define and register the notifications_speak tool (macOS only)

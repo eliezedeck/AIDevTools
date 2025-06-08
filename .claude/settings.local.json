@@ -37,7 +37,10 @@
       "mcp__sidekick__send_process_input",
       "mcp__sidekick__spawn_multiple_processes",
       "Bash(rg:*)",
-      "Bash(sed:*)"
+      "Bash(sed:*)",
+      "WebFetch(domain:pkg.go.dev)",
+      "Bash(true)",
+      "WebFetch(domain:raw.githubusercontent.com)"
     ],
     "deny": []
   }
