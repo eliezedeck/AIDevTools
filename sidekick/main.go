@@ -21,6 +21,9 @@ var version = "dev"
 // Global SSE server reference for session tracking
 var globalSSEServer *server.SSEServer
 
+// Global TUI manager reference for shutdown handling
+var globalTUIManager *TUIManager
+
 // Shutdown channel for coordinated shutdown
 var shutdownChan = make(chan struct{})
 var shutdownOnce sync.Once
@@ -246,6 +249,7 @@ func main() {
 		var tuiManager *TUIManager
 		if *tuiMode {
 			tuiManager = NewTUIManager()
+			globalTUIManager = tuiManager // Store globally for shutdown handling
 			go func() {
 				// Small delay to ensure SSE server is started first
 				time.Sleep(200 * time.Millisecond)
@@ -305,16 +309,87 @@ func main() {
 	}
 }
 
-// handleAggressiveShutdown immediately kills all processes without waiting
-func handleAggressiveShutdown() {
+// handleTUIShutdown performs graceful shutdown with UI feedback
+func handleTUIShutdown(tuiApp *TUIApp) {
 	// Stop the cleanup routine first
 	StopCleanupRoutine()
+	
+	// Create and show shutdown modal
+	modal := NewShutdownModal(tuiApp.app)
+	modal.Show(tuiApp.pages)
 	
 	// Get all tracked processes
 	processes := registry.getAllProcesses()
 	
-	// Immediately force kill all running processes
+	// Filter to only running processes
+	var runningProcesses []*ProcessTracker
 	for _, tracker := range processes {
+		tracker.Mutex.RLock()
+		if tracker.Process != nil && tracker.Process.Process != nil &&
+			(tracker.Status == StatusRunning || tracker.Status == StatusPending) {
+			runningProcesses = append(runningProcesses, tracker)
+		}
+		tracker.Mutex.RUnlock()
+	}
+	
+	totalProcesses := len(runningProcesses)
+	if totalProcesses == 0 {
+		// No processes to terminate
+		modal.UpdateProgress(0, 0)
+		time.Sleep(100 * time.Millisecond) // Brief pause to show the modal
+		return
+	}
+	
+	// Initial modal update
+	modal.UpdateProgress(totalProcesses, totalProcesses)
+	
+	// Send SIGTERM to all running processes
+	for _, tracker := range runningProcesses {
+		tracker.Mutex.RLock()
+		if tracker.Process != nil && tracker.Process.Process != nil {
+			// Send graceful termination signal
+			err := terminateProcessGroup(tracker.Process.Process.Pid)
+			if err != nil {
+				// If platform-specific termination fails, use standard process.Kill()
+				_ = tracker.Process.Process.Kill()
+			}
+		}
+		tracker.Mutex.RUnlock()
+	}
+	
+	// Give processes up to 3 seconds to terminate gracefully
+	deadline := time.Now().Add(3 * time.Second)
+	checkInterval := 100 * time.Millisecond
+	ticker := time.NewTicker(checkInterval)
+	defer ticker.Stop()
+	
+	for time.Now().Before(deadline) {
+		select {
+		case <-ticker.C:
+			// Count remaining processes
+			remainingCount := 0
+			for _, tracker := range runningProcesses {
+				tracker.Mutex.RLock()
+				if tracker.Status == StatusRunning || tracker.Status == StatusPending {
+					remainingCount++
+				}
+				tracker.Mutex.RUnlock()
+			}
+			
+			// Update modal
+			modal.UpdateProgress(remainingCount, totalProcesses)
+			
+			if remainingCount == 0 {
+				// All processes terminated
+				time.Sleep(200 * time.Millisecond) // Brief pause to show success
+				return
+			}
+		}
+	}
+	
+	// Force kill any remaining processes
+	remainingCount := 0
+	for _, tracker := range runningProcesses {
 		tracker.Mutex.Lock()
 		if tracker.Process != nil && tracker.Process.Process != nil &&
 			(tracker.Status == StatusRunning || tracker.Status == StatusPending) {
@@ -325,8 +400,15 @@ func handleAggressiveShutdown() {
 				_ = tracker.Process.Process.Kill()
 			}
 			tracker.Status = StatusKilled
+			remainingCount++
 		}
 		tracker.Mutex.Unlock()
+	}
+	
+	// Final update showing force kill
+	if remainingCount > 0 {
+		modal.UpdateProgress(0, totalProcesses)
+		time.Sleep(300 * time.Millisecond) // Show final state briefly
 	}
 }
 

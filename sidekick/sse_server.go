@@ -60,15 +60,15 @@ func StartSSEServer(mcpServer *server.MCPServer, config SSEServerConfig) error {
 	case <-shutdownChan:
 		logIfNotTUI("Shutting down SSE server...")
 
-		// If TUI is active, use aggressive shutdown for immediate exit
-		if isTUIActiveCheck() {
-			// Aggressive shutdown for TUI mode - kill everything immediately (synchronously)
-			handleAggressiveShutdown()
+		// If TUI is active, use graceful shutdown with UI feedback
+		if isTUIActiveCheck() && globalTUIManager != nil && globalTUIManager.app != nil {
+			// Graceful shutdown for TUI mode with modal UI
+			handleTUIShutdown(globalTUIManager.app)
 			
-			// Immediately close the HTTP server
+			// Immediately close the HTTP server after graceful shutdown
 			httpServer.Close()
 			
-			// No graceful shutdown attempts in TUI mode
+			// No additional shutdown attempts needed
 			return nil
 		} else {
 			// Normal graceful shutdown for non-TUI mode
