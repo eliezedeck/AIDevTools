@@ -9,29 +9,31 @@ import (
 	"github.com/rivo/tview"
 )
 
-// ProcessDetailPageView represents the process detail page
+// ProcessDetailPageView represents the process detail page - IDIOMATIC IMPLEMENTATION
 type ProcessDetailPageView struct {
-	tuiApp      *TUIApp
-	view        *tview.Flex
-	infoPanel   *tview.TextView
-	logView     *tview.TextView
-	inputField  *tview.InputField
-	statusBar   *tview.TextView
-	processID   string
-	autoScroll  bool
-	focusedItem int // 0: log view, 1: input field
+	tuiApp         *TUIApp
+	view           *tview.Flex
+	infoPanel      *tview.TextView
+	logView        *tview.TextView
+	inputField     *tview.InputField
+	statusBar      *tview.TextView
+	processID      string
+	autoScroll     bool
+	focusedItem    int // 0: log view, 1: input field
+	lastLogContent string // Cache for incremental updates
 }
 
 // NewProcessDetailPageView creates a new process detail page view
 func NewProcessDetailPageView(tuiApp *TUIApp) *ProcessDetailPageView {
 	p := &ProcessDetailPageView{
-		tuiApp:      tuiApp,
-		infoPanel:   tview.NewTextView(),
-		logView:     tview.NewTextView(),
-		inputField:  tview.NewInputField(),
-		statusBar:   tview.NewTextView(),
-		autoScroll:  true,
-		focusedItem: 0,
+		tuiApp:         tuiApp,
+		infoPanel:      tview.NewTextView(),
+		logView:        tview.NewTextView(),
+		inputField:     tview.NewInputField(),
+		statusBar:      tview.NewTextView(),
+		autoScroll:     true,
+		focusedItem:    0,
+		lastLogContent: "",
 	}
 	
 	p.setupInfoPanel()
@@ -50,12 +52,20 @@ func (p *ProcessDetailPageView) setupInfoPanel() {
 	p.infoPanel.SetTextAlign(tview.AlignLeft)
 }
 
-// setupLogView configures the log viewer
+// setupLogView configures the log viewer with IDIOMATIC PATTERNS
 func (p *ProcessDetailPageView) setupLogView() {
 	p.logView.SetBorder(true).SetTitle(" Logs ").SetTitleAlign(tview.AlignLeft)
 	p.logView.SetDynamicColors(true)
 	p.logView.SetScrollable(true)
 	p.logView.SetInputCapture(p.handleLogViewKeys)
+	// Enable word wrap for better log viewing
+	p.logView.SetWordWrap(true)
+	// Set up automatic scroll-to-end behavior
+	p.logView.SetChangedFunc(func() {
+		if p.autoScroll {
+			p.logView.ScrollToEnd()
+		}
+	})
 }
 
 // setupInputField configures the input field for stdin
@@ -163,7 +173,7 @@ func (p *ProcessDetailPageView) toggleAutoScroll() {
 	p.logView.SetTitle(title)
 }
 
-// sendInput sends input to the process stdin
+// sendInput sends input to the process stdin with IDIOMATIC ERROR HANDLING
 func (p *ProcessDetailPageView) sendInput(input string) {
 	if p.processID == "" {
 		return
@@ -189,20 +199,25 @@ func (p *ProcessDetailPageView) sendInput(input string) {
 	finalInput := input + "\n"
 	_, err := tracker.StdinWriter.Write([]byte(finalInput))
 	if err != nil {
-		// Could add error handling here
+		// IDIOMATIC: Show error feedback in the log view
+		p.appendToLogView(fmt.Sprintf("\n[ERROR] Failed to send input: %s\n", err.Error()))
 		return
 	}
 	
 	// Add the input to log view for visual feedback
-	p.logView.Write([]byte(fmt.Sprintf("\n[STDIN] %s\n", input)))
-	if p.autoScroll {
-		p.logView.ScrollToEnd()
-	}
+	p.appendToLogView(fmt.Sprintf("\n[STDIN] %s\n", input))
+}
+
+// appendToLogView safely appends content to the log view
+func (p *ProcessDetailPageView) appendToLogView(content string) {
+	// IDIOMATIC: Use the Writer interface for thread-safe appends
+	p.logView.Write([]byte(content))
 }
 
 // SetProcess sets the current process to display
 func (p *ProcessDetailPageView) SetProcess(processID string) {
 	p.processID = processID
+	p.lastLogContent = "" // Reset cache
 	p.updateInfo()
 	p.updateLogs()
 }
@@ -215,11 +230,11 @@ func (p *ProcessDetailPageView) Refresh() {
 	}
 }
 
-// Update updates the page with real-time data
+// Update updates the page with real-time data using INCREMENTAL UPDATES
 func (p *ProcessDetailPageView) Update() {
 	if p.processID != "" {
 		p.updateInfo()
-		p.updateLogs()
+		p.updateLogsIncremental()
 	}
 }
 
@@ -277,7 +292,7 @@ func (p *ProcessDetailPageView) updateInfo() {
 	p.infoPanel.SetText(info)
 }
 
-// updateLogs updates the log viewer with process output
+// updateLogs updates the log viewer with process output (FULL UPDATE)
 func (p *ProcessDetailPageView) updateLogs() {
 	if p.processID == "" {
 		return
@@ -315,9 +330,61 @@ func (p *ProcessDetailPageView) updateLogs() {
 	}
 	
 	p.logView.SetText(output)
+	p.lastLogContent = output
+}
+
+// updateLogsIncremental updates logs using IDIOMATIC INCREMENTAL PATTERN
+func (p *ProcessDetailPageView) updateLogsIncremental() {
+	if p.processID == "" {
+		return
+	}
 	
-	if p.autoScroll {
-		p.logView.ScrollToEnd()
+	tracker, exists := GetProcessByID(p.processID)
+	if !exists {
+		p.logView.SetText("Process not found")
+		return
+	}
+	
+	tracker.Mutex.RLock()
+	defer tracker.Mutex.RUnlock()
+	
+	// Get current output
+	var currentOutput string
+	if tracker.CombineOutput {
+		currentOutput = tracker.StdoutBuffer.GetContent()
+	} else {
+		stdout := tracker.StdoutBuffer.GetContent()
+		stderr := tracker.StderrBuffer.GetContent()
+		
+		// Interleave stdout and stderr (simplified approach)
+		if stdout != "" && stderr != "" {
+			currentOutput = "[STDOUT]\n" + stdout + "\n[STDERR]\n" + stderr
+		} else if stdout != "" {
+			currentOutput = stdout
+		} else if stderr != "" {
+			currentOutput = stderr
+		}
+	}
+	
+	// IDIOMATIC INCREMENTAL UPDATE: Only update if content actually changed
+	if currentOutput != p.lastLogContent {
+		if currentOutput == "" {
+			currentOutput = "No output available"
+		}
+		
+		// Check if we can do an incremental append
+		if p.lastLogContent != "" && strings.HasPrefix(currentOutput, p.lastLogContent) {
+			// IDIOMATIC: Append only the new content
+			newContent := currentOutput[len(p.lastLogContent):]
+			if newContent != "" {
+				p.appendToLogView(newContent)
+			}
+		} else {
+			// Full update needed
+			p.logView.SetText(currentOutput)
+		}
+		
+		p.lastLogContent = currentOutput
 	}
 }
 

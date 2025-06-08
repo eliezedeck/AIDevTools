@@ -7,29 +7,31 @@ import (
 	"github.com/rivo/tview"
 )
 
-// NotificationsPageView represents the notifications page
+// NotificationsPageView represents the notifications page - IDIOMATIC IMPLEMENTATION
 type NotificationsPageView struct {
-	tuiApp        *TUIApp
-	view          *tview.Flex
-	table         *tview.Table
-	controlPanel  *tview.Flex
-	soundToggle   *tview.Button
-	clearButton   *tview.Button
-	statusBar     *tview.TextView
-	selectedRow   int
-	focusedItem   int // 0: table, 1: sound toggle, 2: clear button
+	tuiApp          *TUIApp
+	view            *tview.Flex
+	table           *tview.Table
+	controlPanel    *tview.Flex
+	soundToggle     *tview.Button
+	clearButton     *tview.Button
+	statusBar       *tview.TextView
+	selectedRow     int
+	focusedItem     int // 0: table, 1: sound toggle, 2: clear button
+	lastHistorySize int // Cache for incremental updates
 }
 
 // NewNotificationsPageView creates a new notifications page view
 func NewNotificationsPageView(tuiApp *TUIApp) *NotificationsPageView {
 	p := &NotificationsPageView{
-		tuiApp:      tuiApp,
-		table:       tview.NewTable(),
-		soundToggle: tview.NewButton("Sound: ON"),
-		clearButton: tview.NewButton("Clear History"),
-		statusBar:   tview.NewTextView(),
-		selectedRow: 0,
-		focusedItem: 0,
+		tuiApp:          tuiApp,
+		table:           tview.NewTable(),
+		soundToggle:     tview.NewButton("Sound: ON"),
+		clearButton:     tview.NewButton("Clear History"),
+		statusBar:       tview.NewTextView(),
+		selectedRow:     0,
+		focusedItem:     0,
+		lastHistorySize: 0,
 	}
 	
 	p.setupTable()
@@ -222,6 +224,7 @@ func (p *NotificationsPageView) updateSoundToggleText() {
 // clearHistory clears the notification history
 func (p *NotificationsPageView) clearHistory() {
 	notificationManager.ClearHistory()
+	p.lastHistorySize = 0 // Reset cache
 	p.Refresh()
 }
 
@@ -231,13 +234,13 @@ func (p *NotificationsPageView) Refresh() {
 	p.updateSoundToggleText()
 }
 
-// Update updates the table with real-time data
+// Update updates the table with real-time data using IDIOMATIC INCREMENTAL UPDATES
 func (p *NotificationsPageView) Update() {
-	p.populateTable()
+	p.populateTableIncremental()
 	p.updateSoundToggleText()
 }
 
-// populateTable populates the table with notification history
+// populateTable populates the table with notification history (FULL REBUILD)
 func (p *NotificationsPageView) populateTable() {
 	// Clear table except headers
 	for row := p.table.GetRowCount() - 1; row > 0; row-- {
@@ -278,6 +281,66 @@ func (p *NotificationsPageView) populateTable() {
 		p.table.Select(p.selectedRow, 0)
 	} else if p.table.GetRowCount() > 1 {
 		p.table.Select(1, 0) // Select first data row
+	}
+	
+	p.lastHistorySize = len(history)
+}
+
+// populateTableIncremental uses IDIOMATIC INCREMENTAL UPDATE pattern
+func (p *NotificationsPageView) populateTableIncremental() {
+	// Get current notification history
+	history := notificationManager.GetHistory()
+	
+	// Check if we need to do a full rebuild (major changes)
+	if len(history) < p.lastHistorySize || len(history) == 0 {
+		// History was cleared or significantly changed - do full rebuild
+		p.populateTable()
+		return
+	}
+	
+	// If only new items were added, append them incrementally
+	if len(history) > p.lastHistorySize {
+		// Add only the new entries
+		newEntries := len(history) - p.lastHistorySize
+		for i := 0; i < newEntries; i++ {
+			entry := history[len(history)-1-i] // Get newest entries first
+			row := p.table.GetRowCount() // Add at the end
+			
+			// Format timestamp
+			timeStr := entry.Timestamp.Format("15:04:05")
+			
+			// Truncate message if too long
+			message := entry.Text
+			if len(message) > 80 {
+				message = message[:77] + "..."
+			}
+			
+			// IDIOMATIC: Insert row instead of rebuilding
+			p.table.SetCell(row, 0, tview.NewTableCell(timeStr).SetTextColor(tcell.ColorLightBlue))
+			p.table.SetCell(row, 1, tview.NewTableCell(message).SetTextColor(tcell.ColorWhite))
+		}
+		
+		// Update the title with new count
+		title := fmt.Sprintf(" Notification History (%d) ", len(history))
+		if p.focusedItem == 0 {
+			title += "[FOCUSED]"
+		}
+		p.table.SetTitle(title)
+		
+		p.lastHistorySize = len(history)
+		
+		// Auto-scroll to show newest notification if we're at the bottom
+		if p.table.GetRowCount() > 1 {
+			// Check if we were at the last row before adding
+			currentRow, _ := p.table.GetSelection()
+			if currentRow >= p.table.GetRowCount()-newEntries-1 {
+				// We were near the bottom, scroll to show the newest
+				p.table.Select(p.table.GetRowCount()-1, 0)
+			}
+		}
+	} else if len(history) == p.lastHistorySize {
+		// No changes - no update needed
+		return
 	}
 }
 
