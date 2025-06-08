@@ -89,17 +89,25 @@ func (t *TUIApp) handleGlobalKeys(event *tcell.EventKey) *tcell.EventKey {
 			t.SwitchToPage(NotificationsPage)
 			return nil
 		case 'q', 'Q':
-			// Quit application - mark TUI as inactive immediately
-			setTUIActive(false)
-			t.Stop()
+			// Show quit confirmation dialog
+			ShowQuitConfirmation(t.app, t.pages, func() {
+				// User confirmed quit - mark TUI as inactive immediately
+				setTUIActive(false)
+				t.Stop()
+			})
 			return nil
 		}
 	case tcell.KeyEsc:
-		// Return to processes page or quit if already there
+		// Return to processes page or show quit confirmation if already there
 		if t.currentPage != ProcessesPage {
 			t.SwitchToPage(ProcessesPage)
 		} else {
-			t.Stop()
+			// Show quit confirmation dialog
+			ShowQuitConfirmation(t.app, t.pages, func() {
+				// User confirmed quit - mark TUI as inactive immediately
+				setTUIActive(false)
+				t.Stop()
+			})
 		}
 		return nil
 	}
