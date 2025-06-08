@@ -31,7 +31,11 @@
       "Bash(go get:*)",
       "Bash(timeout:*)",
       "Bash(rm:*)",
-      "Bash(pkill:*)"
+      "Bash(pkill:*)",
+      "mcp__sidekick__list_processes",
+      "mcp__sidekick__get_process_status",
+      "mcp__sidekick__send_process_input",
+      "mcp__sidekick__spawn_multiple_processes"
     ],
     "deny": []
   }

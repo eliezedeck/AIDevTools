@@ -13,23 +13,25 @@ import (
 type ProcessesPageView struct {
 	tuiApp        *TUIApp
 	view          *tview.Flex
-	table         *tview.Table
+	treeView      *tview.TreeView
 	statusBar     *tview.TextView
 	reversedSort  bool
-	selectedRow   int
+	sessionNodes  map[string]*tview.TreeNode
+	processNodes  map[string]*tview.TreeNode
 }
 
 // NewProcessesPageView creates a new processes page view
 func NewProcessesPageView(tuiApp *TUIApp) *ProcessesPageView {
 	p := &ProcessesPageView{
 		tuiApp:       tuiApp,
-		table:        tview.NewTable(),
+		treeView:     tview.NewTreeView(),
 		statusBar:    tview.NewTextView(),
 		reversedSort: true, // Default to newest first
-		selectedRow:  0,
+		sessionNodes: make(map[string]*tview.TreeNode),
+		processNodes: make(map[string]*tview.TreeNode),
 	}
 	
-	p.setupTable()
+	p.setupTreeView()
 	p.setupStatusBar()
 	p.setupLayout()
 	p.Refresh()
@@ -37,36 +39,27 @@ func NewProcessesPageView(tuiApp *TUIApp) *ProcessesPageView {
 	return p
 }
 
-// setupTable configures the table
-func (p *ProcessesPageView) setupTable() {
-	p.table.SetBorder(true).SetTitle(" Processes ").SetTitleAlign(tview.AlignLeft)
-	p.table.SetSelectable(true, false)
-	p.table.SetBorderPadding(0, 0, 1, 1)
+// setupTreeView configures the tree view
+func (p *ProcessesPageView) setupTreeView() {
+	p.treeView.SetBorder(true).SetTitle(" Process Sessions ").SetTitleAlign(tview.AlignLeft)
+	p.treeView.SetBorderPadding(0, 0, 1, 1)
 	
-	// Set table headers
-	headers := []string{"Session", "Status", "PID", "Name", "Command", "Start Time", "ID"}
-	for col, header := range headers {
-		p.table.SetCell(0, col, tview.NewTableCell(header).
-			SetTextColor(tcell.ColorYellow).
-			SetAlign(tview.AlignCenter).
-			SetSelectable(false))
-	}
-	
-	// Set column widths and alignment
-	p.table.SetFixed(1, 0) // Fix the header row
+	// Create root node
+	root := tview.NewTreeNode("Sessions")
+	root.SetColor(tcell.ColorWhite)
+	p.treeView.SetRoot(root)
 	
 	// Set up key handlers
-	p.table.SetInputCapture(p.handleTableKeys)
+	p.treeView.SetInputCapture(p.handleTreeKeys)
 	
 	// Set up selection handler
-	p.table.SetSelectedFunc(p.handleRowSelected)
-	p.table.SetSelectionChangedFunc(p.handleSelectionChanged)
+	p.treeView.SetSelectedFunc(p.handleNodeSelected)
 }
 
 // setupStatusBar configures the status bar
 func (p *ProcessesPageView) setupStatusBar() {
 	p.statusBar.SetBorder(true).SetTitle(" Controls ").SetTitleAlign(tview.AlignLeft)
-	p.statusBar.SetText("[yellow]↑↓[white]: Navigate | [yellow]Enter[white]: View Details | [yellow]R[white]: Toggle Sort | [yellow]Tab[white]: Switch Page | [yellow]Q[white]: Quit")
+	p.statusBar.SetText("[yellow]↑↓[white]: Navigate | [yellow]Enter[white]: View Details | [yellow]Space[white]: Expand/Collapse | [yellow]K[white]: Kill Process | [yellow]Del[white]: Remove Process | [yellow]Shift+Del[white]: Remove Session | [yellow]R[white]: Sort | [yellow]Q[white]: Quit")
 	p.statusBar.SetTextAlign(tview.AlignCenter)
 	p.statusBar.SetDynamicColors(true)
 }
@@ -74,50 +67,60 @@ func (p *ProcessesPageView) setupStatusBar() {
 // setupLayout creates the main layout
 func (p *ProcessesPageView) setupLayout() {
 	p.view = tview.NewFlex().SetDirection(tview.FlexRow).
-		AddItem(p.table, 0, 1, true).
+		AddItem(p.treeView, 0, 1, true).
 		AddItem(p.statusBar, 3, 0, false)
 }
 
-// handleTableKeys handles key events for the table
-func (p *ProcessesPageView) handleTableKeys(event *tcell.EventKey) *tcell.EventKey {
+// handleTreeKeys handles key events for the tree view
+func (p *ProcessesPageView) handleTreeKeys(event *tcell.EventKey) *tcell.EventKey {
 	switch event.Key() {
 	case tcell.KeyEnter:
-		p.openSelectedProcess()
+		p.openSelectedItem()
+		return nil
+	case tcell.KeyDelete:
+		if event.Modifiers()&tcell.ModShift != 0 {
+			// Shift+Delete: Remove session
+			p.removeSelectedSession()
+		} else {
+			// Delete: Remove process
+			p.removeSelectedProcess()
+		}
 		return nil
 	case tcell.KeyRune:
 		switch event.Rune() {
+		case 'k', 'K':
+			p.killSelectedProcess()
+			return nil
 		case 'r', 'R':
 			p.toggleSort()
+			return nil
+		case ' ': // Space key
+			p.toggleSelectedNode()
 			return nil
 		}
 	}
 	return event
 }
 
-// handleRowSelected handles when a row is selected (Enter key or double-click)
-func (p *ProcessesPageView) handleRowSelected(row, col int) {
-	p.openSelectedProcess()
+// handleNodeSelected handles when a node is selected (Enter key or double-click)
+func (p *ProcessesPageView) handleNodeSelected(node *tview.TreeNode) {
+	p.openSelectedItem()
 }
 
-// handleSelectionChanged handles when the selection changes
-func (p *ProcessesPageView) handleSelectionChanged(row, col int) {
-	p.selectedRow = row
-}
-
-// openSelectedProcess opens the detail view for the selected process
-func (p *ProcessesPageView) openSelectedProcess() {
-	row, _ := p.table.GetSelection()
-	if row <= 0 { // Skip header row
+// openSelectedItem opens the detail view for the selected process or toggles session
+func (p *ProcessesPageView) openSelectedItem() {
+	node := p.treeView.GetCurrentNode()
+	if node == nil {
 		return
 	}
 	
-	// Get the process ID from the last column
-	processIDCell := p.table.GetCell(row, 6) // ID column
-	if processIDCell != nil {
-		processID := processIDCell.Text
-		if processID != "" {
-			p.tuiApp.ShowProcessDetail(processID)
-		}
+	// Check if this is a process node (has a process ID reference)
+	if processID, ok := node.GetReference().(string); ok && processID != "" {
+		// This is a process node, open detail view
+		p.tuiApp.ShowProcessDetail(processID)
+	} else {
+		// This is a session node, toggle expansion
+		node.SetExpanded(!node.IsExpanded())
 	}
 }
 
@@ -129,20 +132,21 @@ func (p *ProcessesPageView) toggleSort() {
 
 // Refresh refreshes the processes list
 func (p *ProcessesPageView) Refresh() {
-	p.populateTable()
+	p.populateTreeView()
 }
 
-// Update updates the table with real-time data
+// Update updates the tree view with real-time data
 func (p *ProcessesPageView) Update() {
-	p.populateTable()
+	p.populateTreeView()
 }
 
-// populateTable populates the table with current process data
-func (p *ProcessesPageView) populateTable() {
-	// Clear table except headers
-	for row := p.table.GetRowCount() - 1; row > 0; row-- {
-		p.table.RemoveRow(row)
-	}
+// populateTreeView populates the tree view with current process data
+func (p *ProcessesPageView) populateTreeView() {
+	// Clear existing nodes
+	root := p.treeView.GetRoot()
+	root.ClearChildren()
+	p.sessionNodes = make(map[string]*tview.TreeNode)
+	p.processNodes = make(map[string]*tview.TreeNode)
 	
 	// Get processes grouped by session
 	sessionGroups := GetProcessesBySession(p.reversedSort)
@@ -154,76 +158,55 @@ func (p *ProcessesPageView) populateTable() {
 	}
 	sort.Strings(sessionNames)
 	
-	row := 1
 	totalProcesses := 0
+	totalSessions := 0
+	activeSessions := 0
 	
 	for _, sessionName := range sessionNames {
 		processes := sessionGroups[sessionName]
 		totalProcesses += len(processes)
+		totalSessions++
+		
+		// Determine session status
+		sessionStatus := p.getSessionStatus(processes)
+		if sessionStatus == "Active" {
+			activeSessions++
+		}
+		
+		// Create session node
+		sessionText := fmt.Sprintf("%s (%s) - %d processes", sessionName, sessionStatus, len(processes))
+		sessionNode := tview.NewTreeNode(sessionText)
+		sessionNode.SetColor(p.getSessionColor(sessionStatus))
+		sessionNode.SetExpanded(true) // Default to expanded
+		sessionNode.SetReference("") // Session nodes have empty reference
+		
+		p.sessionNodes[sessionName] = sessionNode
+		root.AddChild(sessionNode)
 		
 		// Add processes for this session
 		for _, process := range processes {
 			process.Mutex.RLock()
 			
-			// Status with color
-			status := string(process.Status)
-			statusColor := getStatusColor(process.Status)
+			// Create process display text
+			processText := p.formatProcessText(process)
+			processNode := tview.NewTreeNode(processText)
+			processNode.SetColor(getStatusColor(process.Status))
+			processNode.SetReference(process.ID) // Store process ID for reference
 			
-			// Format start time
-			startTime := process.StartTime.Format("15:04:05")
-			
-			// Truncate command for display
-			command := process.Command
-			if len(process.Args) > 0 {
-				command += " " + strings.Join(process.Args, " ")
-			}
-			if len(command) > 40 {
-				command = command[:37] + "..."
-			}
-			
-			// Truncate name for display
-			name := process.Name
-			if name == "" {
-				name = "-"
-			}
-			if len(name) > 15 {
-				name = name[:12] + "..."
-			}
-			
-			// Truncate process ID for display
-			id := process.ID
-			if len(id) > 8 {
-				id = id[:8] + "..."
-			}
-			
-			// Add cells
-			p.table.SetCell(row, 0, tview.NewTableCell(sessionName).SetTextColor(tcell.ColorAqua))
-			p.table.SetCell(row, 1, tview.NewTableCell(status).SetTextColor(statusColor))
-			p.table.SetCell(row, 2, tview.NewTableCell(fmt.Sprintf("%d", process.PID)).SetTextColor(tcell.ColorWhite))
-			p.table.SetCell(row, 3, tview.NewTableCell(name).SetTextColor(tcell.ColorGreen))
-			p.table.SetCell(row, 4, tview.NewTableCell(command).SetTextColor(tcell.ColorLightGray))
-			p.table.SetCell(row, 5, tview.NewTableCell(startTime).SetTextColor(tcell.ColorLightBlue))
-			p.table.SetCell(row, 6, tview.NewTableCell(process.ID).SetTextColor(tcell.ColorDarkGray))
+			p.processNodes[process.ID] = processNode
+			sessionNode.AddChild(processNode)
 			
 			process.Mutex.RUnlock()
-			row++
 		}
 	}
 	
-	// Update title with count and sort order
+	// Update title with counts and sort order
 	sortOrder := "↓ Newest First"
 	if !p.reversedSort {
 		sortOrder = "↑ Oldest First"
 	}
-	title := fmt.Sprintf(" Processes (%d) - %s ", totalProcesses, sortOrder)
-	p.table.SetTitle(title)
-	
-	// Restore selection if possible
-	if p.selectedRow > 0 && p.selectedRow < p.table.GetRowCount() {
-		p.table.Select(p.selectedRow, 0)
-	} else if p.table.GetRowCount() > 1 {
-		p.table.Select(1, 0) // Select first data row
-	}
+	title := fmt.Sprintf(" Sessions (%d) - %d Active | Processes (%d) - %s ", totalSessions, activeSessions, totalProcesses, sortOrder)
+	p.treeView.SetTitle(title)
 }
 
 // getStatusColor returns the appropriate color for a process status
@@ -241,6 +224,190 @@ func getStatusColor(status ProcessStatus) tcell.Color {
 		return tcell.ColorYellow
 	default:
 		return tcell.ColorWhite
+	}
+}
+
+// getSessionStatus determines if a session is active based on its processes
+func (p *ProcessesPageView) getSessionStatus(processes []*ProcessTracker) string {
+	for _, process := range processes {
+		process.Mutex.RLock()
+		status := process.Status
+		process.Mutex.RUnlock()
+		
+		if status == StatusRunning || status == StatusPending {
+			return "Active"
+		}
+	}
+	return "Inactive"
+}
+
+// getSessionColor returns the appropriate color for a session status
+func (p *ProcessesPageView) getSessionColor(status string) tcell.Color {
+	switch status {
+	case "Active":
+		return tcell.ColorLime
+	case "Inactive":
+		return tcell.ColorGray
+	default:
+		return tcell.ColorWhite
+	}
+}
+
+// formatProcessText creates display text for a process node
+func (p *ProcessesPageView) formatProcessText(process *ProcessTracker) string {
+	// Status indicator
+	statusSymbol := p.getStatusSymbol(process.Status)
+	
+	// Format command
+	command := process.Command
+	if len(process.Args) > 0 {
+		command += " " + strings.Join(process.Args, " ")
+	}
+	if len(command) > 40 {
+		command = command[:37] + "..."
+	}
+	
+	// Process name or use command
+	name := process.Name
+	if name == "" {
+		name = process.Command
+	}
+	if len(name) > 20 {
+		name = name[:17] + "..."
+	}
+	
+	// Format start time
+	startTime := process.StartTime.Format("15:04:05")
+	
+	// Create display text
+	text := fmt.Sprintf("%s [%s] %s (PID:%d) [%s]", 
+		statusSymbol, string(process.Status), name, process.PID, startTime)
+	
+	return text
+}
+
+// getStatusSymbol returns a unicode symbol for the process status
+func (p *ProcessesPageView) getStatusSymbol(status ProcessStatus) string {
+	switch status {
+	case StatusRunning:
+		return "▶"
+	case StatusCompleted:
+		return "✓"
+	case StatusFailed:
+		return "✗"
+	case StatusKilled:
+		return "☠"
+	case StatusPending:
+		return "⏳"
+	default:
+		return "?"
+	}
+}
+
+// toggleSelectedNode toggles the expansion of the selected node
+func (p *ProcessesPageView) toggleSelectedNode() {
+	node := p.treeView.GetCurrentNode()
+	if node == nil {
+		return
+	}
+	
+	// Only toggle session nodes (those without a process ID reference)
+	if node.GetReference() == nil || node.GetReference().(string) == "" {
+		node.SetExpanded(!node.IsExpanded())
+	}
+}
+
+// killSelectedProcess kills the currently selected process
+func (p *ProcessesPageView) killSelectedProcess() {
+	node := p.treeView.GetCurrentNode()
+	if node == nil {
+		return
+	}
+	
+	// Check if this is a process node
+	if processID, ok := node.GetReference().(string); ok && processID != "" {
+		// Get the process and kill it
+		if tracker, exists := registry.getProcess(processID); exists {
+			tracker.Mutex.Lock()
+			defer tracker.Mutex.Unlock()
+			
+			if tracker.Status == StatusRunning && tracker.Process != nil && tracker.Process.Process != nil {
+				// Close stdin first
+				if tracker.StdinWriter != nil {
+					tracker.StdinWriter.Close()
+				}
+				
+				// Kill the process
+				err := terminateProcessGroup(tracker.Process.Process.Pid)
+				if err != nil {
+					if tracker.Process.Process != nil {
+						tracker.Process.Process.Kill()
+					}
+				}
+				tracker.Status = StatusKilled
+				
+				// Update display immediately
+				p.Refresh()
+			}
+		}
+	}
+}
+
+// removeSelectedProcess removes the currently selected process from the registry
+func (p *ProcessesPageView) removeSelectedProcess() {
+	node := p.treeView.GetCurrentNode()
+	if node == nil {
+		return
+	}
+	
+	// Check if this is a process node
+	if processID, ok := node.GetReference().(string); ok && processID != "" {
+		// Remove the process from registry
+		registry.removeProcess(processID)
+		
+		// Update display immediately
+		p.Refresh()
+	}
+}
+
+// removeSelectedSession removes an inactive session and all its processes
+func (p *ProcessesPageView) removeSelectedSession() {
+	node := p.treeView.GetCurrentNode()
+	if node == nil {
+		return
+	}
+	
+	// Check if this is a session node (no process ID reference)
+	if node.GetReference() == nil || node.GetReference().(string) == "" {
+		// Extract session name from node text
+		sessionText := node.GetText()
+		
+		// Find the session name (text before the first space and parentheses)
+		sessionName := sessionText
+		if spaceIndex := strings.Index(sessionText, " ("); spaceIndex != -1 {
+			sessionName = sessionText[:spaceIndex]
+		}
+		
+		// Get processes for this session
+		sessionGroups := GetProcessesBySession(false)
+		if processes, exists := sessionGroups[sessionName]; exists {
+			// Check if session is inactive
+			sessionStatus := p.getSessionStatus(processes)
+			if sessionStatus == "Inactive" {
+				// Remove all processes in this session
+				for _, process := range processes {
+					registry.removeProcess(process.ID)
+				}
+				
+				// If we have a session manager, remove the session
+				if sessionManager != nil && sessionName != "No Session" {
+					sessionManager.RemoveSession(sessionName)
+				}
+				
+				// Update display immediately
+				p.Refresh()
+			}
+		}
 	}
 }
 
