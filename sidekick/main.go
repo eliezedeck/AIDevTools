@@ -25,6 +25,33 @@ var globalSSEServer *server.SSEServer
 var shutdownChan = make(chan struct{})
 var shutdownOnce sync.Once
 
+// TUI state tracking for mutual exclusivity with logging
+var (
+	isTUIActive bool
+	tuiMutex    sync.RWMutex
+)
+
+// setTUIActive safely sets the TUI active state
+func setTUIActive(active bool) {
+	tuiMutex.Lock()
+	defer tuiMutex.Unlock()
+	isTUIActive = active
+}
+
+// isTUIActiveCheck safely checks if TUI is active
+func isTUIActiveCheck() bool {
+	tuiMutex.RLock()
+	defer tuiMutex.RUnlock()
+	return isTUIActive
+}
+
+// logIfNotTUI logs only when SSE server is running but TUI is not active
+func logIfNotTUI(format string, args ...interface{}) {
+	if globalSSEServer != nil && !isTUIActiveCheck() {
+		log.Printf(format, args...)
+	}
+}
+
 func main() {
 	// Handle command-line flags
 	versionFlag := flag.Bool("version", false, "Print version and exit")
@@ -227,11 +254,14 @@ func main() {
 			go func() {
 				// Small delay to ensure SSE server is started first
 				time.Sleep(200 * time.Millisecond)
+				setTUIActive(true)
 				if err := tuiManager.Start(); err != nil {
+					setTUIActive(false)
 					log.Printf("TUI error: %v", err)
 				}
+				setTUIActive(false)
 				// TUI has exited, trigger shutdown of entire application
-				log.Println("TUI exited, shutting down sidekick...")
+				logIfNotTUI("TUI exited, shutting down sidekick...")
 				shutdownOnce.Do(func() {
 					close(shutdownChan)
 				})

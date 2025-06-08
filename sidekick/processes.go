@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"os/exec"
 	"strings"
@@ -357,7 +356,7 @@ func (r *ProcessRegistry) killProcessesBySession(sessionID string) int {
 					logMsg += fmt.Sprintf(" (name: %s)", tracker.Name)
 				}
 				logMsg += fmt.Sprintf(" (PID: %d, ID: %s)", tracker.PID, tracker.ID)
-				log.Println(logMsg)
+				logIfNotTUI(logMsg)
 			} else if tracker.Status == StatusPending {
 				// Cancel pending processes
 				tracker.Status = StatusKilled
@@ -369,7 +368,7 @@ func (r *ProcessRegistry) killProcessesBySession(sessionID string) int {
 					logMsg += fmt.Sprintf(" (name: %s)", tracker.Name)
 				}
 				logMsg += fmt.Sprintf(" (ID: %s)", tracker.ID)
-				log.Println(logMsg)
+				logIfNotTUI(logMsg)
 			}
 			tracker.Mutex.Unlock()
 		} else {
@@ -438,21 +437,19 @@ func executeDelayedProcess(ctx context.Context, tracker *ProcessTracker, envVars
 		tracker.Status = StatusRunning
 		
 		// Log process start (SSE mode only)
-		if globalSSEServer != nil {
-			logMsg := fmt.Sprintf("🚀 Process started: %s", tracker.Command)
-			if len(tracker.Args) > 0 {
-				logMsg += fmt.Sprintf(" %v", tracker.Args)
-			}
-			logMsg += fmt.Sprintf(" (PID: %d, ID: %s", tracker.PID, tracker.ID)
-			if tracker.Name != "" {
-				logMsg += fmt.Sprintf(", name: %s", tracker.Name)
-			}
-			if tracker.SessionID != "" {
-				logMsg += fmt.Sprintf(", session: %s", tracker.SessionID)
-			}
-			logMsg += ")"
-			log.Println(logMsg)
+		logMsg := fmt.Sprintf("🚀 Process started: %s", tracker.Command)
+		if len(tracker.Args) > 0 {
+			logMsg += fmt.Sprintf(" %v", tracker.Args)
 		}
+		logMsg += fmt.Sprintf(" (PID: %d, ID: %s", tracker.PID, tracker.ID)
+		if tracker.Name != "" {
+			logMsg += fmt.Sprintf(", name: %s", tracker.Name)
+		}
+		if tracker.SessionID != "" {
+			logMsg += fmt.Sprintf(", session: %s", tracker.SessionID)
+		}
+		logMsg += ")"
+		logIfNotTUI(logMsg)
 		
 		tracker.Mutex.Unlock()
 
@@ -491,21 +488,19 @@ func executeDelayedProcess(ctx context.Context, tracker *ProcessTracker, envVars
 		tracker.Status = StatusRunning
 		
 		// Log process start (SSE mode only)
-		if globalSSEServer != nil {
-			logMsg := fmt.Sprintf("🚀 Process started: %s", tracker.Command)
-			if len(tracker.Args) > 0 {
-				logMsg += fmt.Sprintf(" %v", tracker.Args)
-			}
-			logMsg += fmt.Sprintf(" (PID: %d, ID: %s", tracker.PID, tracker.ID)
-			if tracker.Name != "" {
-				logMsg += fmt.Sprintf(", name: %s", tracker.Name)
-			}
-			if tracker.SessionID != "" {
-				logMsg += fmt.Sprintf(", session: %s", tracker.SessionID)
-			}
-			logMsg += ")"
-			log.Println(logMsg)
+		logMsg := fmt.Sprintf("🚀 Process started: %s", tracker.Command)
+		if len(tracker.Args) > 0 {
+			logMsg += fmt.Sprintf(" %v", tracker.Args)
 		}
+		logMsg += fmt.Sprintf(" (PID: %d, ID: %s", tracker.PID, tracker.ID)
+		if tracker.Name != "" {
+			logMsg += fmt.Sprintf(", name: %s", tracker.Name)
+		}
+		if tracker.SessionID != "" {
+			logMsg += fmt.Sprintf(", session: %s", tracker.SessionID)
+		}
+		logMsg += ")"
+		logIfNotTUI(logMsg)
 		
 		tracker.Mutex.Unlock()
 
@@ -537,22 +532,20 @@ func executeDelayedProcess(ctx context.Context, tracker *ProcessTracker, envVars
 		}
 		
 		// Log process termination (SSE mode only)
-		if globalSSEServer != nil {
-			logMsg := fmt.Sprintf("💀 Process terminated: %s", tracker.Command)
-			if tracker.Name != "" {
-				logMsg += fmt.Sprintf(" (name: %s)", tracker.Name)
-			}
-			logMsg += fmt.Sprintf(" (PID: %d, ID: %s", tracker.PID, tracker.ID)
-			if tracker.ExitCode != nil {
-				logMsg += fmt.Sprintf(", exit code: %d", *tracker.ExitCode)
-			}
-			logMsg += fmt.Sprintf(", status: %s", tracker.Status)
-			if tracker.SessionID != "" {
-				logMsg += fmt.Sprintf(", session: %s", tracker.SessionID)
-			}
-			logMsg += ")"
-			log.Println(logMsg)
+		logMsg := fmt.Sprintf("💀 Process terminated: %s", tracker.Command)
+		if tracker.Name != "" {
+			logMsg += fmt.Sprintf(" (name: %s)", tracker.Name)
 		}
+		logMsg += fmt.Sprintf(" (PID: %d, ID: %s", tracker.PID, tracker.ID)
+		if tracker.ExitCode != nil {
+			logMsg += fmt.Sprintf(", exit code: %d", *tracker.ExitCode)
+		}
+		logMsg += fmt.Sprintf(", status: %s", tracker.Status)
+		if tracker.SessionID != "" {
+			logMsg += fmt.Sprintf(", session: %s", tracker.SessionID)
+		}
+		logMsg += ")"
+		logIfNotTUI(logMsg)
 	}()
 
 	return nil
@@ -1532,7 +1525,6 @@ func handleKillProcess(ctx context.Context, request mcp.CallToolRequest) (*mcp.C
 		tracker.Status = StatusKilled
 		
 		// Log manual kill (SSE mode only)
-		if globalSSEServer != nil {
 			logMsg := fmt.Sprintf("🔫 Process killed manually: %s", tracker.Command)
 			if tracker.Name != "" {
 				logMsg += fmt.Sprintf(" (name: %s)", tracker.Name)
@@ -1542,8 +1534,7 @@ func handleKillProcess(ctx context.Context, request mcp.CallToolRequest) (*mcp.C
 				logMsg += fmt.Sprintf(", session: %s", tracker.SessionID)
 			}
 			logMsg += ")"
-			log.Println(logMsg)
-		}
+			logIfNotTUI(logMsg)
 	}
 
 	result := map[string]any{

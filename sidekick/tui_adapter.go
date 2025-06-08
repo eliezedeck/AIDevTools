@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"log"
 	"time"
 )
 
@@ -25,7 +24,7 @@ func NewTUIManager() *TUIManager {
 
 // Start starts the TUI application
 func (tm *TUIManager) Start() error {
-	log.Println("🖥️  Starting TUI mode...")
+	// TUI starting - no logging allowed in TUI mode
 	
 	// Create the TUI application
 	tm.app = NewTUIApp()
@@ -60,7 +59,7 @@ func StartTUIIfEnabled() *TUIManager {
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				log.Printf("TUI panic recovered: %v", r)
+				// Panic recovered, but can't log in TUI mode
 			}
 		}()
 		
@@ -68,7 +67,7 @@ func StartTUIIfEnabled() *TUIManager {
 		time.Sleep(100 * time.Millisecond)
 		
 		if err := tuiManager.Start(); err != nil {
-			log.Printf("TUI error: %v", err)
+			// TUI error occurred, but can't log in TUI mode
 		}
 	}()
 	
