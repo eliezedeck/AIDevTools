@@ -106,6 +106,9 @@ func StartSSEServer(mcpServer *server.MCPServer, config SSEServerConfig) error {
 func handleSessionClosed(sessionID string) {
 	logIfNotTUI("🔌 [SSE] Session %s disconnected, cleaning up...", sessionID)
 
+	// Mark session as disconnected (but keep it in memory)
+	sessionManager.MarkSessionDisconnected(sessionID)
+
 	// Kill all processes associated with this session
 	killedCount := registry.killProcessesBySession(sessionID)
 
@@ -114,7 +117,4 @@ func handleSessionClosed(sessionID string) {
 	} else {
 		logIfNotTUI("🧹 [SSE] No processes to clean up for session %s", sessionID)
 	}
-
-	// Remove session from manager
-	sessionManager.RemoveSession(sessionID)
 }

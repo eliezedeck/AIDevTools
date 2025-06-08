@@ -13,9 +13,18 @@ type SessionManager struct {
 	sessions map[string]*Session
 }
 
+// SessionStatus represents the state of a session
+type SessionStatus string
+
+const (
+	SessionConnected    SessionStatus = "connected"
+	SessionDisconnected SessionStatus = "disconnected"
+)
+
 // Session represents an SSE client session
 type Session struct {
 	ID        string
+	Status    SessionStatus
 	Processes []string // Process IDs owned by this session
 	Context   context.Context
 	Cancel    context.CancelFunc // Cancel function for the session context
@@ -55,6 +64,7 @@ func (sm *SessionManager) CreateSession(sessionID string) *Session {
 	
 	session := &Session{
 		ID:        sessionID,
+		Status:    SessionConnected,
 		Processes: []string{},
 		Context:   ctx,
 		Cancel:    cancel,
@@ -91,6 +101,25 @@ func (sm *SessionManager) AddProcessToSession(sessionID, processID string) {
 		session.Processes = append(session.Processes, processID)
 		logIfNotTUI("🔗 [SSE] New session %s created with first process %s", sessionID, processID)
 	}
+}
+
+// MarkSessionDisconnected marks a session as disconnected but keeps it in memory
+func (sm *SessionManager) MarkSessionDisconnected(sessionID string) []string {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	
+	if session, exists := sm.sessions[sessionID]; exists {
+		session.Status = SessionDisconnected
+		processes := session.Processes
+		// Cancel the session context
+		if session.Cancel != nil {
+			session.Cancel()
+		}
+		logIfNotTUI("🔌 [SSE] Session %s marked as disconnected", sessionID)
+		return processes
+	}
+	
+	return []string{}
 }
 
 // RemoveSession removes a session and returns its process IDs

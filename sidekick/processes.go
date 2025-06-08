@@ -528,6 +528,11 @@ func executeDelayedProcess(ctx context.Context, tracker *ProcessTracker, envVars
 		tracker.Mutex.Lock()
 		defer tracker.Mutex.Unlock()
 
+		// If process was already killed (e.g., by session cleanup), don't override the status
+		if tracker.Status == StatusKilled {
+			return
+		}
+
 		if err != nil {
 			if exitError, ok := err.(*exec.ExitError); ok {
 				exitCode := exitError.ExitCode()
