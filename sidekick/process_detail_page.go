@@ -21,6 +21,9 @@ type ProcessDetailPageView struct {
 	autoScroll     bool
 	focusedItem    int // 0: log view, 1: input field
 	lastLogContent string // Cache for incremental updates
+	isScrolling    bool // Track if user is actively scrolling
+	lastScrollTime time.Time // Track when user last scrolled
+	scrollLockDuration time.Duration // How long to lock updates after scroll
 }
 
 // NewProcessDetailPageView creates a new process detail page view
@@ -34,6 +37,9 @@ func NewProcessDetailPageView(tuiApp *TUIApp) *ProcessDetailPageView {
 		autoScroll:     true,
 		focusedItem:    0,
 		lastLogContent: "",
+		isScrolling:    false,
+		lastScrollTime: time.Now(),
+		scrollLockDuration: 3 * time.Second, // Lock updates for 3 seconds after scroll
 	}
 	
 	p.setupInfoPanel()
@@ -41,6 +47,9 @@ func NewProcessDetailPageView(tuiApp *TUIApp) *ProcessDetailPageView {
 	p.setupInputField()
 	p.setupStatusBar()
 	p.setupLayout()
+	
+	// Initialize scroll status display
+	p.updateScrollStatus()
 	
 	return p
 }
@@ -60,12 +69,8 @@ func (p *ProcessDetailPageView) setupLogView() {
 	p.logView.SetInputCapture(p.handleLogViewKeys)
 	// Enable word wrap for better log viewing
 	p.logView.SetWordWrap(true)
-	// Set up automatic scroll-to-end behavior
-	p.logView.SetChangedFunc(func() {
-		if p.autoScroll {
-			p.logView.ScrollToEnd()
-		}
-	})
+	// Remove SetChangedFunc to prevent auto-scroll conflicts
+	// Auto-scroll will be handled manually in update methods
 }
 
 // setupInputField configures the input field for stdin
@@ -94,6 +99,9 @@ func (p *ProcessDetailPageView) setupLayout() {
 	
 	// Set up global key handlers for the main view
 	p.view.SetInputCapture(p.handleGlobalKeys)
+	
+	// Set up mouse handler for the log view to detect scroll events
+	p.logView.SetMouseCapture(p.handleLogViewMouse)
 }
 
 // handleGlobalKeys handles global key events for this page
@@ -118,6 +126,10 @@ func (p *ProcessDetailPageView) handleLogViewKeys(event *tcell.EventKey) *tcell.
 	case tcell.KeyTab:
 		p.switchFocus()
 		return nil
+	case tcell.KeyUp, tcell.KeyDown, tcell.KeyPgUp, tcell.KeyPgDn, tcell.KeyHome, tcell.KeyEnd:
+		// User is scrolling with keyboard
+		p.onScrollEvent()
+		return event // Let the default handler process the scroll
 	}
 	return event
 }
@@ -161,16 +173,14 @@ func (p *ProcessDetailPageView) switchFocus() {
 // toggleAutoScroll toggles auto-scroll for the log view
 func (p *ProcessDetailPageView) toggleAutoScroll() {
 	p.autoScroll = !p.autoScroll
-	autoScrollStatus := "OFF"
-	if p.autoScroll {
-		autoScrollStatus = "ON"
-	}
+	p.updateScrollStatus()
 	
-	title := fmt.Sprintf(" Logs [Auto-scroll: %s] ", autoScrollStatus)
-	if p.focusedItem == 0 {
-		title += "[FOCUSED]"
+	// If enabling auto-scroll, scroll to end immediately
+	if p.autoScroll {
+		p.logView.ScrollToEnd()
+		// Clear scroll lock when re-enabling auto-scroll
+		p.isScrolling = false
 	}
-	p.logView.SetTitle(title)
 }
 
 // sendInput sends input to the process stdin with IDIOMATIC ERROR HANDLING
@@ -214,10 +224,67 @@ func (p *ProcessDetailPageView) appendToLogView(content string) {
 	p.logView.Write([]byte(content))
 }
 
+// onScrollEvent marks that the user is actively scrolling
+func (p *ProcessDetailPageView) onScrollEvent() {
+	p.isScrolling = true
+	p.lastScrollTime = time.Now()
+	// Disable auto-scroll when user manually scrolls
+	if p.autoScroll {
+		p.autoScroll = false
+		p.updateScrollStatus()
+	}
+}
+
+// handleLogViewMouse handles mouse events for the log view
+func (p *ProcessDetailPageView) handleLogViewMouse(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
+	switch action {
+	case tview.MouseScrollUp, tview.MouseScrollDown:
+		// User is scrolling with mouse wheel
+		p.onScrollEvent()
+	case tview.MouseLeftDown, tview.MouseLeftClick:
+		// User might be selecting text or clicking in the view
+		p.onScrollEvent()
+	}
+	// Return the original action and event to let tview handle the scroll
+	return action, event
+}
+
+// updateScrollStatus updates the log view title to show scroll status
+func (p *ProcessDetailPageView) updateScrollStatus() {
+	autoScrollStatus := "OFF"
+	if p.autoScroll {
+		autoScrollStatus = "ON"
+	}
+	
+	title := fmt.Sprintf(" Logs [Auto-scroll: %s] ", autoScrollStatus)
+	if p.focusedItem == 0 {
+		title += "[FOCUSED]"
+	}
+	p.logView.SetTitle(title)
+}
+
+// isScrollLocked returns true if updates should be paused due to recent scrolling
+func (p *ProcessDetailPageView) isScrollLocked() bool {
+	if !p.isScrolling {
+		return false
+	}
+	
+	// Check if scroll lock duration has passed
+	if time.Since(p.lastScrollTime) > p.scrollLockDuration {
+		p.isScrolling = false
+		return false
+	}
+	
+	return true
+}
+
 // SetProcess sets the current process to display
 func (p *ProcessDetailPageView) SetProcess(processID string) {
 	p.processID = processID
 	p.lastLogContent = "" // Reset cache
+	p.isScrolling = false // Reset scroll state
+	p.autoScroll = true // Re-enable auto-scroll for new process
+	p.updateScrollStatus()
 	p.updateInfo()
 	p.updateLogs()
 }
@@ -339,6 +406,11 @@ func (p *ProcessDetailPageView) updateLogsIncremental() {
 		return
 	}
 	
+	// Skip updates if user is actively scrolling
+	if p.isScrollLocked() {
+		return
+	}
+	
 	tracker, exists := GetProcessByID(p.processID)
 	if !exists {
 		p.logView.SetText("Process not found")
@@ -378,10 +450,20 @@ func (p *ProcessDetailPageView) updateLogsIncremental() {
 			newContent := currentOutput[len(p.lastLogContent):]
 			if newContent != "" {
 				p.appendToLogView(newContent)
+				// Handle auto-scroll manually
+				if p.autoScroll {
+					p.logView.ScrollToEnd()
+				}
 			}
 		} else {
 			// Full update needed
 			p.logView.SetText(currentOutput)
+			// Handle auto-scroll after full update
+			if p.autoScroll {
+				p.logView.ScrollToEnd()
+			}
+			// Note: tview TextView doesn't support SetScrollOffset, so scroll position
+			// may be lost on full updates. This is a limitation we accept to fix the freeze.
 		}
 		
 		p.lastLogContent = currentOutput
