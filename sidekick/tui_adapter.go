@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"time"
 )
 
@@ -135,7 +136,10 @@ func SendProcessInputForTUI(processID, input string) error {
 	// Send input with newline
 	finalInput := input + "\n"
 	_, err := tracker.StdinWriter.Write([]byte(finalInput))
-	return err
+	if err != nil {
+		return fmt.Errorf("failed to write to process stdin: %w", err)
+	}
+	return nil
 }
 
 // GetProcessOutputForTUI gets process output for TUI display

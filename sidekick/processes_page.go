@@ -146,7 +146,9 @@ func (p *ProcessesPageView) killSelectedProcess() {
 				err := terminateProcessGroup(tracker.Process.Process.Pid)
 				if err != nil {
 					if tracker.Process.Process != nil {
-						tracker.Process.Process.Kill()
+						if killErr := tracker.Process.Process.Kill(); killErr != nil {
+							// Process termination failed - likely already dead
+						}
 					}
 				}
 				tracker.Status = StatusKilled

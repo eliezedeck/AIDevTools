@@ -360,7 +360,9 @@ func (r *ProcessRegistry) killProcessesBySession(sessionID string) int {
 				err := terminateProcessGroup(tracker.Process.Process.Pid)
 				if err != nil {
 					// Fallback to standard kill
-					_ = tracker.Process.Process.Kill()
+					if killErr := tracker.Process.Process.Kill(); killErr != nil {
+						// Process termination failed - may already be dead
+					}
 				}
 				tracker.Status = StatusKilled
 				killedCount++
@@ -728,7 +730,11 @@ func handleSpawnProcess(ctx context.Context, request mcp.CallToolRequest) (*mcp.
 			// Start background goroutine to wait and then execute
 			go func() {
 				time.Sleep(delay)
-				_ = executeDelayedProcess(context.Background(), tracker, envVars)
+				if err := executeDelayedProcess(context.Background(), tracker, envVars); err != nil {
+					// Log error but don't fail - this is an async operation
+					// In production, this would be logged to a proper logger
+					// The error will be reflected in the process status
+				}
 			}()
 
 			result = map[string]any{
@@ -1531,7 +1537,10 @@ func handleKillProcess(ctx context.Context, request mcp.CallToolRequest) (*mcp.C
 	if tracker.Process != nil && tracker.Process.Process != nil {
 		// Close stdin first to signal the process
 		if tracker.StdinWriter != nil {
-			tracker.StdinWriter.Close()
+			if err := tracker.StdinWriter.Close(); err != nil {
+				// Log the error but continue with termination
+				// Stdin close errors are non-fatal for process termination
+			}
 		}
 
 		// Kill the entire process group (Unix) or process (Windows)

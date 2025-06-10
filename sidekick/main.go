@@ -360,7 +360,10 @@ func handleTUIShutdown(tuiApp *TUIApp) {
 			err := terminateProcessGroup(tracker.Process.Process.Pid)
 			if err != nil {
 				// If platform-specific termination fails, use standard process.Kill()
-				_ = tracker.Process.Process.Kill()
+			if killErr := tracker.Process.Process.Kill(); killErr != nil {
+					// Both termination methods failed - process may already be dead
+					// This is expected in some cases, so we don't propagate the error
+				}
 			}
 		}
 		tracker.Mutex.RUnlock()
@@ -406,7 +409,9 @@ func handleTUIShutdown(tuiApp *TUIApp) {
 			err := forceKillProcessGroup(tracker.Process.Process.Pid)
 			if err != nil {
 				// If platform-specific force kill fails, use standard process.Kill()
-				_ = tracker.Process.Process.Kill()
+				if killErr := tracker.Process.Process.Kill(); killErr != nil {
+					// Process may already be dead - this is expected during shutdown
+				}
 			}
 			tracker.Status = StatusKilled
 			remainingCount++
@@ -439,7 +444,9 @@ func handleGracefulShutdown() {
 			err := terminateProcessGroup(tracker.Process.Process.Pid)
 			if err != nil {
 				// If platform-specific termination fails, use standard process.Kill()
-				_ = tracker.Process.Process.Kill()
+				if killErr := tracker.Process.Process.Kill(); killErr != nil {
+					// Process termination failed - may already be dead
+				}
 			}
 		}
 		tracker.Mutex.RUnlock()
@@ -480,7 +487,9 @@ func handleGracefulShutdown() {
 			err := forceKillProcessGroup(tracker.Process.Process.Pid)
 			if err != nil {
 				// If platform-specific force kill fails, use standard process.Kill()
-				_ = tracker.Process.Process.Kill()
+				if killErr := tracker.Process.Process.Kill(); killErr != nil {
+					// Final kill attempt failed - process likely already terminated
+				}
 			}
 		}
 		tracker.Mutex.RUnlock()

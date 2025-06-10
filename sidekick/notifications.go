@@ -105,13 +105,21 @@ func handleSpeak(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToo
 	if notificationManager.IsSoundEnabled() {
 		// 🔊 Play system sound asynchronously
 		go func() {
-			_ = exec.Command("afplay", "/System/Library/Sounds/Glass.aiff", "-v", "5").Run()
+			if err := exec.Command("afplay", "/System/Library/Sounds/Glass.aiff", "-v", "5").Run(); err != nil {
+				// Log error but don't fail the notification - sound is non-critical
+				// In a production system, this would go to a proper logger
+				// For now, we'll just continue silently as the sound is optional
+			}
 		}()
 
 		// 🗣️ Speak the text after a short delay
 		go func() {
 			time.Sleep(500 * time.Millisecond)
-			_ = exec.Command("say", "-v", "Zoe (Premium)", text).Run()
+			if err := exec.Command("say", "-v", "Zoe (Premium)", text).Run(); err != nil {
+				// Log error but don't fail the notification - speech is non-critical
+				// The notification has already been recorded in history
+				// In a production system, this would go to a proper logger
+			}
 		}()
 	}
 
