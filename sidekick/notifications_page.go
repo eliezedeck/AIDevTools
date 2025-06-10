@@ -52,10 +52,18 @@ func (p *NotificationsPageView) setupTable() {
 	// Set table headers
 	headers := []string{"Time", "Message"}
 	for col, header := range headers {
-		p.table.SetCell(0, col, tview.NewTableCell(header).
-			SetTextColor(tcell.ColorYellow).
-			SetAlign(tview.AlignCenter).
-			SetSelectable(false))
+		if col == 0 {
+			p.table.SetCell(0, col, tview.NewTableCell(header).
+				SetTextColor(tcell.ColorYellow).
+				SetAlign(tview.AlignCenter).
+				SetSelectable(false))
+		} else {
+			p.table.SetCell(0, col, tview.NewTableCell(header).
+				SetTextColor(tcell.ColorYellow).
+				SetAlign(tview.AlignLeft).
+				SetSelectable(false).
+				SetExpansion(1)) // Make message column expand
+		}
 	}
 	
 	p.table.SetFixed(1, 0) // Fix the header row
@@ -258,15 +266,16 @@ func (p *NotificationsPageView) populateTable() {
 		// Format timestamp
 		timeStr := entry.Timestamp.Format("15:04:05")
 		
-		// Truncate message if too long
+		// Don't truncate message - let tview handle wrapping
 		message := entry.Text
-		if len(message) > 80 {
-			message = message[:77] + "..."
-		}
 		
 		// Add cells
-		p.table.SetCell(row, 0, tview.NewTableCell(timeStr).SetTextColor(tcell.ColorLightBlue))
-		p.table.SetCell(row, 1, tview.NewTableCell(message).SetTextColor(tcell.ColorWhite))
+		p.table.SetCell(row, 0, tview.NewTableCell(timeStr).
+			SetTextColor(tcell.ColorLightBlue).
+			SetAlign(tview.AlignCenter))
+		p.table.SetCell(row, 1, tview.NewTableCell(message).
+			SetTextColor(tcell.ColorWhite).
+			SetExpansion(1))
 	}
 	
 	// Update title with count
