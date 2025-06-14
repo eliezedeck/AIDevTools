@@ -167,11 +167,32 @@ go install github.com/eliezedeck/AIDevTools/sidekick@latest
 
 Sidekick supports two transport modes:
 
-#### 1. **Stdio Mode** (Default)
+#### 1. **TUI Mode** (Default)
+Interactive Terminal User Interface with SSE transport, perfect for development and monitoring.
+
+```bash
+# Start with default TUI mode (SSE + TUI on port 5050)
+sidekick
+
+# Custom host and port
+sidekick --host 0.0.0.0 --port 3000
+
+# Disable TUI (SSE only)
+sidekick --tui=false
+
+# SSE endpoints:
+# - SSE stream: http://localhost:5050/mcp/sse
+# - Messages: http://localhost:5050/mcp/message
+```
+
+#### 2. **Stdio Mode**
 Traditional MCP server mode, perfect for Claude Code integration.
 
 ```bash
-# Basic setup
+# Stdio mode (disable SSE)
+sidekick --sse=false
+
+# Basic Claude Code setup
 claude mcp add sidekick sidekick
 
 # With custom environment variables
@@ -181,30 +202,12 @@ claude mcp add sidekick -e SIDEKICK_BUFFER_SIZE=20971520 sidekick
 claude mcp add sidekick --scope filesystem sidekick
 ```
 
-#### 2. **SSE Mode** (Server-Sent Events)
-HTTP-based transport with session management for web-based AI clients.
-
-```bash
-# Start SSE server
-sidekick --sse
-
-# Custom host and port
-sidekick --sse --host 0.0.0.0 --port 3000
-
-# With Terminal UI (v0.3.0+)
-sidekick --sse --tui
-
-# SSE endpoints:
-# - SSE stream: http://localhost:8080/mcp/sse
-# - Messages: http://localhost:8080/mcp/message
-```
-
-**SSE Mode Features:**
+**TUI/SSE Mode Features:**
+- 🖥️ **Interactive TUI**: Visual process management with real-time monitoring (default)
 - 🔐 **Session Management**: Each client connection gets a unique session
 - 🧹 **Auto-cleanup**: Processes are automatically killed when client disconnects
 - 🌐 **HTTP Transport**: Works with web-based AI agents and custom integrations
 - 📡 **Real-time Updates**: Server-Sent Events for streaming process output
-- 🖥️ **Optional TUI**: Enable with `--tui` flag for visual process management
 
 ### Environment Variables
 
@@ -497,7 +500,7 @@ await mcp.call("notifications_speak", {
 
 ```javascript
 // Connect to SSE server
-const eventSource = new EventSource('http://localhost:8080/mcp/sse');
+const eventSource = new EventSource('http://localhost:5050/mcp/sse');
 const sessionId = null;
 
 eventSource.onmessage = (event) => {
@@ -509,7 +512,7 @@ eventSource.onmessage = (event) => {
 
 // Send MCP request
 async function callTool(method, params) {
-  const response = await fetch('http://localhost:8080/mcp/message', {
+  const response = await fetch('http://localhost:5050/mcp/message', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
