@@ -32,12 +32,12 @@ func NewProcessesPageView(tuiApp *TUIApp) *ProcessesPageView {
 		lastSessionData: make(map[string][]*ProcessTracker),
 		isInitialized:   false,
 	}
-	
+
 	p.setupTable()
 	p.setupStatusBar()
 	p.setupLayout()
 	p.Refresh()
-	
+
 	return p
 }
 
@@ -47,10 +47,10 @@ func (p *ProcessesPageView) setupTable() {
 	p.table.SetBorder(true).SetTitle(" Processes ").SetTitleAlign(tview.AlignLeft)
 	p.table.SetSelectable(true, false)
 	p.table.SetBorderPadding(0, 0, 1, 1)
-	
+
 	// Fixed header row - idiomatic pattern
 	p.table.SetFixed(1, 0)
-	
+
 	// Key handlers
 	p.table.SetInputCapture(p.handleTableKeys)
 	p.table.SetSelectedFunc(p.handleRowSelected)
@@ -110,7 +110,7 @@ func (p *ProcessesPageView) openSelectedProcess() {
 	if row <= 0 { // Skip header row
 		return
 	}
-	
+
 	// Get the process ID from the last column
 	processIDCell := p.table.GetCell(row, 6) // ID column
 	if processIDCell != nil && processIDCell.Text != "" {
@@ -120,44 +120,97 @@ func (p *ProcessesPageView) openSelectedProcess() {
 	// If it's a session header (no process ID), do nothing
 }
 
-// killSelectedProcess kills the currently selected process
+// killSelectedProcess shows confirmation dialog and kills the currently selected process
 func (p *ProcessesPageView) killSelectedProcess() {
 	row, _ := p.table.GetSelection()
 	if row <= 0 { // Skip header row
 		return
 	}
-	
+
 	// Get the process ID from the last column
 	processIDCell := p.table.GetCell(row, 6) // ID column
-	if processIDCell != nil && processIDCell.Text != "" {
-		processID := processIDCell.Text
-		// Get the process and kill it
-		if tracker, exists := registry.getProcess(processID); exists {
-			tracker.Mutex.Lock()
-			defer tracker.Mutex.Unlock()
-			
-			if tracker.Status == StatusRunning && tracker.Process != nil && tracker.Process.Process != nil {
-				// Close stdin first
-				if tracker.StdinWriter != nil {
-					tracker.StdinWriter.Close()
-				}
-				
-				// Kill the process
-				err := terminateProcessGroup(tracker.Process.Process.Pid)
-				if err != nil {
-					if tracker.Process.Process != nil {
-						if killErr := tracker.Process.Process.Kill(); killErr != nil {
-							// Process termination failed - likely already dead
-						}
-					}
-				}
-				tracker.Status = StatusKilled
-				
-				// Update display immediately with incremental update
-				p.Update()
-			}
+	if processIDCell == nil || processIDCell.Text == "" {
+		return
+	}
+
+	processID := processIDCell.Text
+
+	// Get process info for confirmation dialog
+	tracker, exists := registry.getProcess(processID)
+	if !exists {
+		return
+	}
+
+	tracker.Mutex.RLock()
+	processName := tracker.Command
+	if tracker.Name != "" {
+		processName = tracker.Name + " (" + tracker.Command + ")"
+	}
+	processStatus := tracker.Status
+	tracker.Mutex.RUnlock()
+
+	// Only show confirmation for running processes
+	if processStatus != StatusRunning {
+		return
+	}
+
+	// Show kill confirmation dialog
+	ShowKillConfirmation(p.tuiApp.app, p.tuiApp.pages, processName, func() {
+		// User confirmed - kill the process
+		p.performKillProcess(processID)
+	})
+}
+
+// performKillProcess actually kills the process
+func (p *ProcessesPageView) performKillProcess(processID string) {
+	tracker, exists := registry.getProcess(processID)
+	if !exists {
+		return
+	}
+
+	tracker.Mutex.Lock()
+
+	if tracker.Status != StatusRunning || tracker.Process == nil || tracker.Process.Process == nil {
+		tracker.Mutex.Unlock()
+		return
+	}
+
+	// Get process info for logging
+	pid := tracker.Process.Process.Pid
+	command := tracker.Command
+	name := tracker.Name
+
+	// Close stdin first
+	if tracker.StdinWriter != nil {
+		tracker.StdinWriter.Close()
+	}
+
+	// Mark as being killed
+	tracker.Status = StatusKilled
+
+	// Get the process handle before releasing the mutex
+	process := tracker.Process.Process
+	tracker.Mutex.Unlock()
+
+	// Kill the process (outside of mutex to avoid blocking)
+	err := terminateProcessGroup(pid)
+	if err != nil && process != nil {
+		// Fallback to standard kill
+		if killErr := process.Kill(); killErr != nil {
+			LogError("ProcessKill", "Failed to kill process",
+				fmt.Sprintf("PID: %d, Command: %s, Error: %v", pid, command, killErr))
 		}
 	}
+
+	// Log the kill action
+	logMsg := fmt.Sprintf("Process killed by user: %s", command)
+	if name != "" {
+		logMsg += fmt.Sprintf(" (%s)", name)
+	}
+	LogInfo("ProcessKill", logMsg, fmt.Sprintf("PID: %d, ID: %s", pid, processID))
+
+	// The UI will be updated automatically by the regular update routine
+	// No need to force an immediate update which can cause deadlocks
 }
 
 // removeSelectedProcess removes the currently selected process from the registry
@@ -166,14 +219,14 @@ func (p *ProcessesPageView) removeSelectedProcess() {
 	if row <= 0 { // Skip header row
 		return
 	}
-	
+
 	// Get the process ID from the last column
 	processIDCell := p.table.GetCell(row, 6) // ID column
 	if processIDCell != nil && processIDCell.Text != "" {
 		processID := processIDCell.Text
 		// Remove the process from registry
 		registry.removeProcess(processID)
-		
+
 		// Update display immediately with incremental update
 		p.Update()
 	}
@@ -202,7 +255,7 @@ func (p *ProcessesPageView) Update() {
 func (p *ProcessesPageView) populateTableIncremental() {
 	// Get current processes grouped by session
 	sessionGroups := GetProcessesBySession(p.reversedSort)
-	
+
 	// If not initialized or major changes, do full rebuild
 	if !p.isInitialized || p.majorChangesDetected(sessionGroups) {
 		p.fullRebuild(sessionGroups)
@@ -211,7 +264,7 @@ func (p *ProcessesPageView) populateTableIncremental() {
 		p.updateProcessDataCache(sessionGroups)
 		return
 	}
-	
+
 	// IDIOMATIC INCREMENTAL UPDATES - only update what changed
 	p.incrementalUpdate(sessionGroups)
 	p.lastSessionData = p.copySessionData(sessionGroups)
@@ -224,13 +277,13 @@ func (p *ProcessesPageView) majorChangesDetected(newSessionGroups map[string][]*
 	if len(newSessionGroups) != len(p.lastSessionData) {
 		return true
 	}
-	
+
 	for sessionName := range newSessionGroups {
 		if _, exists := p.lastSessionData[sessionName]; !exists {
 			return true
 		}
 	}
-	
+
 	// Check if process count per session changed significantly
 	for sessionName, processes := range newSessionGroups {
 		if oldProcesses, exists := p.lastSessionData[sessionName]; exists {
@@ -239,7 +292,7 @@ func (p *ProcessesPageView) majorChangesDetected(newSessionGroups map[string][]*
 			}
 		}
 	}
-	
+
 	return false
 }
 
@@ -253,10 +306,10 @@ func (p *ProcessesPageView) fullRebuild(sessionGroups map[string][]*ProcessTrack
 			selectedProcessID = cell.Text
 		}
 	}
-	
+
 	// ONLY clear when absolutely necessary - this is what causes the jump!
 	p.table.Clear()
-	
+
 	// Build the table from scratch
 	p.buildTableContent(sessionGroups, selectedProcessID)
 }
@@ -265,16 +318,16 @@ func (p *ProcessesPageView) fullRebuild(sessionGroups map[string][]*ProcessTrack
 func (p *ProcessesPageView) incrementalUpdate(sessionGroups map[string][]*ProcessTracker) {
 	// Track which rows need updates
 	rowUpdates := make(map[int]bool)
-	
+
 	// Check each current table row for changes
 	for row := 1; row < p.table.GetRowCount(); row++ {
 		processIDCell := p.table.GetCell(row, 6)
 		if processIDCell == nil || processIDCell.Text == "" {
 			continue // Skip session headers
 		}
-		
+
 		processID := processIDCell.Text
-		
+
 		// Find this process in the new data
 		var currentProcess *ProcessTracker
 		for _, processes := range sessionGroups {
@@ -288,13 +341,13 @@ func (p *ProcessesPageView) incrementalUpdate(sessionGroups map[string][]*Proces
 				break
 			}
 		}
-		
+
 		// If process not found in new data, mark for update (will be removed)
 		if currentProcess == nil {
 			rowUpdates[row] = true
 			continue
 		}
-		
+
 		// Check if this process data changed
 		if lastProcess, exists := p.lastProcessData[processID]; exists {
 			if p.processDataChanged(lastProcess, currentProcess) {
@@ -304,14 +357,14 @@ func (p *ProcessesPageView) incrementalUpdate(sessionGroups map[string][]*Proces
 			rowUpdates[row] = true
 		}
 	}
-	
+
 	// Apply selective updates only to changed rows
 	for row := range rowUpdates {
 		if row < p.table.GetRowCount() {
 			p.updateTableRow(row, sessionGroups)
 		}
 	}
-	
+
 	// Update the title and total count
 	p.updateTableTitle(sessionGroups)
 }
@@ -322,9 +375,9 @@ func (p *ProcessesPageView) updateTableRow(row int, sessionGroups map[string][]*
 	if processIDCell == nil || processIDCell.Text == "" {
 		return // Skip session headers
 	}
-	
+
 	processID := processIDCell.Text
-	
+
 	// Find the process in new data
 	var currentProcess *ProcessTracker
 	for _, processes := range sessionGroups {
@@ -338,14 +391,14 @@ func (p *ProcessesPageView) updateTableRow(row int, sessionGroups map[string][]*
 			break
 		}
 	}
-	
+
 	if currentProcess == nil {
 		// Process no longer exists - remove this row would require full rebuild
 		// For now, mark it as removed in place
 		p.table.GetCell(row, 1).SetText("REMOVED").SetTextColor(tcell.ColorRed)
 		return
 	}
-	
+
 	// Update each cell in this row
 	currentProcess.Mutex.RLock()
 	p.table.SetCell(row, 0, tview.NewTableCell(fmt.Sprintf("  %s", currentProcess.SessionID)).SetTextColor(tcell.ColorAqua))
@@ -368,45 +421,45 @@ func (p *ProcessesPageView) buildTableContent(sessionGroups map[string][]*Proces
 			SetAlign(tview.AlignCenter).
 			SetSelectable(false))
 	}
-	
+
 	// Get sorted session names
 	sessionNames := make([]string, 0, len(sessionGroups))
 	for sessionName := range sessionGroups {
 		sessionNames = append(sessionNames, sessionName)
 	}
 	sort.Strings(sessionNames)
-	
+
 	row := 1 // Start after header
 	totalProcesses := 0
 	newSelectedRow := 1
-	
+
 	for _, sessionName := range sessionNames {
 		processes := sessionGroups[sessionName]
 		totalProcesses += len(processes)
-		
+
 		// Add session header row
 		sessionText := fmt.Sprintf("📁 %s (%d processes)", sessionName, len(processes))
 		sessionColor := tcell.ColorLime
 		if p.getSessionStatus(processes) == "Inactive" {
 			sessionColor = tcell.ColorGray
 		}
-		
+
 		// Session header row - spans first column, others empty
 		p.table.SetCell(row, 0, tview.NewTableCell(sessionText).SetTextColor(sessionColor))
 		for col := 1; col < 7; col++ {
 			p.table.SetCell(row, col, tview.NewTableCell("").SetSelectable(false))
 		}
 		row++
-		
+
 		// Add processes for this session
 		for _, process := range processes {
 			process.Mutex.RLock()
-			
+
 			// Track selection
 			if process.ID == selectedProcessID {
 				newSelectedRow = row
 			}
-			
+
 			// Create process row
 			p.table.SetCell(row, 0, tview.NewTableCell(fmt.Sprintf("  %s", process.SessionID)).SetTextColor(tcell.ColorAqua))
 			p.table.SetCell(row, 1, tview.NewTableCell(string(process.Status)).SetTextColor(getStatusColor(process.Status)))
@@ -415,15 +468,15 @@ func (p *ProcessesPageView) buildTableContent(sessionGroups map[string][]*Proces
 			p.table.SetCell(row, 4, tview.NewTableCell(p.formatCommand(process)).SetTextColor(tcell.ColorLightGray))
 			p.table.SetCell(row, 5, tview.NewTableCell(process.StartTime.Format("15:04:05")).SetTextColor(tcell.ColorLightBlue))
 			p.table.SetCell(row, 6, tview.NewTableCell(process.ID).SetTextColor(tcell.ColorDarkGray))
-			
+
 			process.Mutex.RUnlock()
 			row++
 		}
 	}
-	
+
 	// Update title
 	p.updateTableTitle(sessionGroups)
-	
+
 	// Restore selection
 	if p.table.GetRowCount() > 1 {
 		if selectedProcessID != "" && newSelectedRow > 0 && newSelectedRow < p.table.GetRowCount() {
@@ -446,7 +499,7 @@ func (p *ProcessesPageView) updateTableTitle(sessionGroups map[string][]*Process
 	for _, processes := range sessionGroups {
 		totalProcesses += len(processes)
 	}
-	
+
 	sortOrder := "↓ Newest First"
 	if !p.reversedSort {
 		sortOrder = "↑ Oldest First"
@@ -461,7 +514,7 @@ func (p *ProcessesPageView) processDataChanged(old, new *ProcessTracker) bool {
 	new.Mutex.RLock()
 	defer old.Mutex.RUnlock()
 	defer new.Mutex.RUnlock()
-	
+
 	return old.Status != new.Status ||
 		old.PID != new.PID ||
 		old.Name != new.Name ||
@@ -508,7 +561,7 @@ func (p *ProcessesPageView) getSessionStatus(processes []*ProcessTracker) string
 		process.Mutex.RLock()
 		status := process.Status
 		process.Mutex.RUnlock()
-		
+
 		if status == StatusRunning || status == StatusPending {
 			return "Active"
 		}
