@@ -269,7 +269,7 @@ func main() {
 				}
 				setTUIActive(false)
 				// TUI has exited, trigger shutdown of entire application
-				logIfNotTUI("TUI exited, shutting down sidekick...")
+				LogInfo("TUI", "TUI exited, shutting down sidekick...")
 				shutdownOnce.Do(func() {
 					close(shutdownChan)
 				})

@@ -22,7 +22,7 @@ type SSEServerConfig struct {
 
 // StartSSEServer starts the MCP server in SSE mode
 func StartSSEServer(mcpServer *server.MCPServer, config SSEServerConfig) error {
-	logIfNotTUI("Starting Sidekick in SSE mode on %s:%s", config.Host, config.Port)
+	LogInfo("SSEServer", "Starting Sidekick in SSE mode", fmt.Sprintf("Host: %s, Port: %s", config.Host, config.Port))
 
 	// Create SSE server with session cleanup
 	sseServer := server.NewSSEServer(mcpServer,
@@ -36,8 +36,8 @@ func StartSSEServer(mcpServer *server.MCPServer, config SSEServerConfig) error {
 
 	// Start HTTP server
 	addr := fmt.Sprintf("%s:%s", config.Host, config.Port)
-	logIfNotTUI("SSE server listening on %s", addr)
-	logIfNotTUI("SSE endpoint: http://%s/mcp/sse", addr)
+	LogInfo("SSEServer", "SSE server listening", fmt.Sprintf("Address: %s", addr))
+	LogInfo("SSEServer", "SSE endpoint available", fmt.Sprintf("URL: http://%s/mcp/sse", addr))
 
 	// Create HTTP server
 	httpServer := &http.Server{
@@ -58,7 +58,7 @@ func StartSSEServer(mcpServer *server.MCPServer, config SSEServerConfig) error {
 	case err := <-errChan:
 		return fmt.Errorf("SSE server error: %w", err)
 	case <-shutdownChan:
-		logIfNotTUI("Shutting down SSE server...")
+		LogInfo("SSEServer", "Shutting down SSE server...")
 
 		// If TUI is active, use graceful shutdown with UI feedback
 		if isTUIActiveCheck() && globalTUIManager != nil && globalTUIManager.app != nil {
@@ -89,12 +89,12 @@ func StartSSEServer(mcpServer *server.MCPServer, config SSEServerConfig) error {
 			
 			// Shutdown SSE server first
 			if err := sseServer.Shutdown(shutdownCtx); err != nil {
-				logIfNotTUI("SSE server shutdown error: %v", err)
+				LogError("SSEServer", "SSE server shutdown error", err.Error())
 			}
 			
 			// Then shutdown HTTP server (will likely be already closed by force close)
 			if err := httpServer.Shutdown(shutdownCtx); err != nil && err != http.ErrServerClosed {
-				logIfNotTUI("HTTP server shutdown error: %v", err)
+				LogError("SSEServer", "HTTP server shutdown error", err.Error())
 			}
 
 			return nil
@@ -104,7 +104,7 @@ func StartSSEServer(mcpServer *server.MCPServer, config SSEServerConfig) error {
 
 // handleSessionClosed is called when an SSE session is closed
 func handleSessionClosed(sessionID string) {
-	logIfNotTUI("🔌 [SSE] Session %s disconnected, cleaning up...", sessionID)
+	LogInfo("SSEServer", "Session disconnected, cleaning up", fmt.Sprintf("SessionID: %s", sessionID))
 
 	// Mark session as disconnected (but keep it in memory)
 	sessionManager.MarkSessionDisconnected(sessionID)
@@ -113,8 +113,9 @@ func handleSessionClosed(sessionID string) {
 	killedCount := registry.killProcessesBySession(sessionID)
 
 	if killedCount > 0 {
-		logIfNotTUI("🧹 [SSE] Killed %d processes for disconnected session %s", killedCount, sessionID)
+		LogInfo("SSEServer", "Processes killed for disconnected session", 
+			fmt.Sprintf("Count: %d, SessionID: %s", killedCount, sessionID))
 	} else {
-		logIfNotTUI("🧹 [SSE] No processes to clean up for session %s", sessionID)
+		LogInfo("SSEServer", "No processes to clean up", fmt.Sprintf("SessionID: %s", sessionID))
 	}
 }

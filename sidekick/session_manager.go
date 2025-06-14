@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"github.com/mark3labs/mcp-go/server"
@@ -71,7 +72,7 @@ func (sm *SessionManager) CreateSession(sessionID string) *Session {
 	}
 	
 	sm.sessions[sessionID] = session
-	logIfNotTUI("🔗 [SSE] New session created: %s", sessionID)
+	LogInfo("Session", "New session created", fmt.Sprintf("SessionID: %s", sessionID))
 	return session
 }
 
@@ -91,15 +92,16 @@ func (sm *SessionManager) AddProcessToSession(sessionID, processID string) {
 	
 	if session, exists := sm.sessions[sessionID]; exists {
 		session.Processes = append(session.Processes, processID)
-		logIfNotTUI("🔧 [SSE] Process %s added to session %s (total: %d)", 
-			processID, sessionID, len(session.Processes))
+		LogInfo("Session", "Process added to session", 
+			fmt.Sprintf("ProcessID: %s, SessionID: %s, Total: %d", processID, sessionID, len(session.Processes)))
 	} else {
 		// Create session if it doesn't exist (first process for this session)
 		sm.mu.Unlock()
 		session := sm.CreateSession(sessionID)
 		sm.mu.Lock()
 		session.Processes = append(session.Processes, processID)
-		logIfNotTUI("🔗 [SSE] New session %s created with first process %s", sessionID, processID)
+		LogInfo("Session", "New session created with first process", 
+			fmt.Sprintf("SessionID: %s, ProcessID: %s", sessionID, processID))
 	}
 }
 
@@ -115,7 +117,7 @@ func (sm *SessionManager) MarkSessionDisconnected(sessionID string) []string {
 		if session.Cancel != nil {
 			session.Cancel()
 		}
-		logIfNotTUI("🔌 [SSE] Session %s marked as disconnected", sessionID)
+		LogInfo("Session", "Session marked as disconnected", fmt.Sprintf("SessionID: %s", sessionID))
 		return processes
 	}
 	

@@ -368,24 +368,23 @@ func (r *ProcessRegistry) killProcessesBySession(sessionID string) int {
 				killedCount++
 				
 				// Log session cleanup kill
-				logMsg := fmt.Sprintf("🧹 [SSE] Process killed (session cleanup): %s", tracker.Command)
+				logMsg := fmt.Sprintf("Process killed (session cleanup): %s", tracker.Command)
 				if tracker.Name != "" {
 					logMsg += fmt.Sprintf(" (name: %s)", tracker.Name)
 				}
-				logMsg += fmt.Sprintf(" (PID: %d, ID: %s)", tracker.PID, tracker.ID)
-				logIfNotTUI(logMsg)
+				details := fmt.Sprintf("PID: %d, ID: %s", tracker.PID, tracker.ID)
+				LogInfo("ProcessCleanup", logMsg, details)
 			} else if tracker.Status == StatusPending {
 				// Cancel pending processes
 				tracker.Status = StatusKilled
 				killedCount++
 				
 				// Log cancelled pending process
-				logMsg := fmt.Sprintf("🚫 [SSE] Pending process cancelled (session cleanup): %s", tracker.Command)
+				logMsg := fmt.Sprintf("Pending process cancelled (session cleanup): %s", tracker.Command)
 				if tracker.Name != "" {
 					logMsg += fmt.Sprintf(" (name: %s)", tracker.Name)
 				}
-				logMsg += fmt.Sprintf(" (ID: %s)", tracker.ID)
-				logIfNotTUI(logMsg)
+				LogInfo("ProcessCleanup", logMsg, fmt.Sprintf("ID: %s", tracker.ID))
 			}
 			tracker.Mutex.Unlock()
 		} else {
@@ -453,20 +452,19 @@ func executeDelayedProcess(ctx context.Context, tracker *ProcessTracker, envVars
 		tracker.StdinWriter = stdinPipe
 		tracker.Status = StatusRunning
 		
-		// Log process start (SSE mode only)
-		logMsg := fmt.Sprintf("🚀 Process started: %s", tracker.Command)
+		// Log process start
+		logMsg := fmt.Sprintf("Process started: %s", tracker.Command)
 		if len(tracker.Args) > 0 {
 			logMsg += fmt.Sprintf(" %v", tracker.Args)
 		}
-		logMsg += fmt.Sprintf(" (PID: %d, ID: %s", tracker.PID, tracker.ID)
+		details := fmt.Sprintf("PID: %d, ID: %s", tracker.PID, tracker.ID)
 		if tracker.Name != "" {
-			logMsg += fmt.Sprintf(", name: %s", tracker.Name)
+			details += fmt.Sprintf(", name: %s", tracker.Name)
 		}
 		if tracker.SessionID != "" {
-			logMsg += fmt.Sprintf(", session: %s", tracker.SessionID)
+			details += fmt.Sprintf(", session: %s", tracker.SessionID)
 		}
-		logMsg += ")"
-		logIfNotTUI(logMsg)
+		LogInfo("Process", logMsg, details)
 		
 		tracker.Mutex.Unlock()
 
@@ -504,20 +502,19 @@ func executeDelayedProcess(ctx context.Context, tracker *ProcessTracker, envVars
 		tracker.StdinWriter = stdinPipe
 		tracker.Status = StatusRunning
 		
-		// Log process start (SSE mode only)
-		logMsg := fmt.Sprintf("🚀 Process started: %s", tracker.Command)
+		// Log process start
+		logMsg := fmt.Sprintf("Process started: %s", tracker.Command)
 		if len(tracker.Args) > 0 {
 			logMsg += fmt.Sprintf(" %v", tracker.Args)
 		}
-		logMsg += fmt.Sprintf(" (PID: %d, ID: %s", tracker.PID, tracker.ID)
+		details := fmt.Sprintf("PID: %d, ID: %s", tracker.PID, tracker.ID)
 		if tracker.Name != "" {
-			logMsg += fmt.Sprintf(", name: %s", tracker.Name)
+			details += fmt.Sprintf(", name: %s", tracker.Name)
 		}
 		if tracker.SessionID != "" {
-			logMsg += fmt.Sprintf(", session: %s", tracker.SessionID)
+			details += fmt.Sprintf(", session: %s", tracker.SessionID)
 		}
-		logMsg += ")"
-		logIfNotTUI(logMsg)
+		LogInfo("Process", logMsg, details)
 		
 		tracker.Mutex.Unlock()
 
@@ -567,7 +564,17 @@ func executeDelayedProcess(ctx context.Context, tracker *ProcessTracker, envVars
 			logMsg += fmt.Sprintf(", session: %s", tracker.SessionID)
 		}
 		logMsg += ")"
-		logIfNotTUI(logMsg)
+		// Extract the command name for the log message
+		cmdName := tracker.Command
+		if tracker.Name != "" {
+			cmdName += fmt.Sprintf(" (%s)", tracker.Name)
+		}
+		// Log as error if process failed, otherwise info
+		if tracker.Status == StatusFailed {
+			LogError("Process", "Process terminated: " + cmdName, logMsg)
+		} else {
+			LogInfo("Process", "Process terminated: " + cmdName, logMsg)
+		}
 	}()
 
 	return nil
@@ -1563,7 +1570,13 @@ func handleKillProcess(ctx context.Context, request mcp.CallToolRequest) (*mcp.C
 				logMsg += fmt.Sprintf(", session: %s", tracker.SessionID)
 			}
 			logMsg += ")"
-			logIfNotTUI(logMsg)
+			
+			// Log as error if process failed, otherwise info
+			if tracker.Status == StatusFailed {
+				LogError("Process", "Process terminated: " + tracker.Command, logMsg)
+			} else {
+				LogInfo("Process", "Process terminated: " + tracker.Command, logMsg)
+			}
 	}
 
 	result := map[string]any{
