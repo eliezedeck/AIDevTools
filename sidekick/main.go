@@ -59,9 +59,9 @@ func logIfNotTUI(format string, args ...interface{}) {
 func main() {
 	// Handle command-line flags
 	versionFlag := flag.Bool("version", false, "Print version and exit")
-	sseMode := flag.Bool("sse", false, "Run in SSE mode instead of stdio")
-	tuiMode := flag.Bool("tui", false, "Enable TUI mode (only available with --sse)")
-	port := flag.String("port", "8080", "Port for SSE server (default: 8080)")
+	sseMode := flag.Bool("sse", true, "Run in SSE mode instead of stdio (default: true)")
+	tuiMode := flag.Bool("tui", true, "Enable TUI mode (default: true, only available with --sse)")
+	port := flag.String("port", "5050", "Port for SSE server (default: 5050)")
 	host := flag.String("host", "localhost", "Host for SSE server (default: localhost)")
 	flag.Parse()
 
@@ -253,7 +253,7 @@ func main() {
 			Host: *host,
 			Port: *port,
 		}
-		
+
 		// Start TUI if requested
 		var tuiManager *TUIManager
 		if *tuiMode {
@@ -275,7 +275,7 @@ func main() {
 				})
 			}()
 		}
-		
+
 		// Handle shutdown in a separate goroutine
 		go func() {
 			select {
@@ -293,25 +293,25 @@ func main() {
 				return
 			}
 		}()
-		
+
 		// Start SSE server (blocks until shutdown)
 		if err := StartSSEServer(s, config); err != nil {
 			log.Fatalf("Failed to start SSE server: %v\n", err)
 		}
-		
+
 		// SSE server has shut down - exit immediately
 		// In TUI mode, processes were already force killed
 		// In non-TUI mode, graceful shutdown was attempted
 		os.Exit(0)
 	} else {
-		// Stdio mode (default)
+		// Stdio mode
 		// Handle signals for stdio mode
 		go func() {
 			<-sigChan
 			handleGracefulShutdown()
 			os.Exit(0)
 		}()
-		
+
 		if err := server.ServeStdio(s); err != nil {
 			fmt.Printf("Server error: %v\n", err)
 		}
@@ -322,14 +322,14 @@ func main() {
 func handleTUIShutdown(tuiApp *TUIApp) {
 	// Stop the cleanup routine first
 	StopCleanupRoutine()
-	
+
 	// Create and show shutdown modal
 	modal := NewShutdownModal(tuiApp.app)
 	modal.Show(tuiApp.pages)
-	
+
 	// Get all tracked processes
 	processes := registry.getAllProcesses()
-	
+
 	// Filter to only running processes
 	var runningProcesses []*ProcessTracker
 	for _, tracker := range processes {
@@ -340,7 +340,7 @@ func handleTUIShutdown(tuiApp *TUIApp) {
 		}
 		tracker.Mutex.RUnlock()
 	}
-	
+
 	totalProcesses := len(runningProcesses)
 	if totalProcesses == 0 {
 		// No processes to terminate
@@ -348,10 +348,10 @@ func handleTUIShutdown(tuiApp *TUIApp) {
 		time.Sleep(100 * time.Millisecond) // Brief pause to show the modal
 		return
 	}
-	
+
 	// Initial modal update
 	modal.UpdateProgress(totalProcesses, totalProcesses)
-	
+
 	// Send SIGTERM to all running processes
 	for _, tracker := range runningProcesses {
 		tracker.Mutex.RLock()
@@ -360,7 +360,7 @@ func handleTUIShutdown(tuiApp *TUIApp) {
 			err := terminateProcessGroup(tracker.Process.Process.Pid)
 			if err != nil {
 				// If platform-specific termination fails, use standard process.Kill()
-			if killErr := tracker.Process.Process.Kill(); killErr != nil {
+				if killErr := tracker.Process.Process.Kill(); killErr != nil {
 					// Both termination methods failed - process may already be dead
 					// This is expected in some cases, so we don't propagate the error
 				}
@@ -368,13 +368,13 @@ func handleTUIShutdown(tuiApp *TUIApp) {
 		}
 		tracker.Mutex.RUnlock()
 	}
-	
+
 	// Give processes up to 3 seconds to terminate gracefully
 	deadline := time.Now().Add(3 * time.Second)
 	checkInterval := 100 * time.Millisecond
 	ticker := time.NewTicker(checkInterval)
 	defer ticker.Stop()
-	
+
 	for time.Now().Before(deadline) {
 		select {
 		case <-ticker.C:
@@ -387,10 +387,10 @@ func handleTUIShutdown(tuiApp *TUIApp) {
 				}
 				tracker.Mutex.RUnlock()
 			}
-			
+
 			// Update modal
 			modal.UpdateProgress(remainingCount, totalProcesses)
-			
+
 			if remainingCount == 0 {
 				// All processes terminated
 				time.Sleep(200 * time.Millisecond) // Brief pause to show success
@@ -398,7 +398,7 @@ func handleTUIShutdown(tuiApp *TUIApp) {
 			}
 		}
 	}
-	
+
 	// Force kill any remaining processes
 	remainingCount := 0
 	for _, tracker := range runningProcesses {
@@ -418,7 +418,7 @@ func handleTUIShutdown(tuiApp *TUIApp) {
 		}
 		tracker.Mutex.Unlock()
 	}
-	
+
 	// Final update showing force kill
 	if remainingCount > 0 {
 		modal.UpdateProgress(0, totalProcesses)
@@ -431,7 +431,7 @@ func handleTUIShutdown(tuiApp *TUIApp) {
 func handleGracefulShutdown() {
 	// Stop the cleanup routine first
 	StopCleanupRoutine()
-	
+
 	// Get all tracked processes
 	processes := registry.getAllProcesses()
 
