@@ -34,13 +34,13 @@ func NewLogsPageView(tuiApp *TUIApp) *LogsPageView {
 		focusedItem:   0,
 		showAllLevels: true,
 	}
-	
+
 	p.setupTable()
 	p.setupControls()
 	p.setupStatusBar()
 	p.setupLayout()
 	p.Refresh()
-	
+
 	return p
 }
 
@@ -49,7 +49,7 @@ func (p *LogsPageView) setupTable() {
 	p.table.SetBorder(true).SetTitle(" System Logs ").SetTitleAlign(tview.AlignLeft)
 	p.table.SetSelectable(true, false)
 	p.table.SetBorderPadding(0, 0, 1, 1)
-	
+
 	// Set table headers
 	headers := []string{"Time", "Level", "Source", "Message"}
 	for i, header := range headers {
@@ -59,19 +59,19 @@ func (p *LogsPageView) setupTable() {
 			SetSelectable(false)
 		p.table.SetCell(0, i, cell)
 	}
-	
+
 	// Handle table selection changes
 	p.table.SetSelectionChangedFunc(func(row, column int) {
 		p.selectedRow = row
 		p.updateStatusBar()
 	})
-	
+
 	// Handle key events
 	p.table.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		if p.focusedItem != 0 {
 			return event
 		}
-		
+
 		switch event.Key() {
 		case tcell.KeyRune:
 			switch event.Rune() {
@@ -85,8 +85,8 @@ func (p *LogsPageView) setupTable() {
 		}
 		return event
 	})
-	
-	p.table.SetBackgroundColor(tcell.ColorDefault)
+
+	p.table.SetBackgroundColor(tcell.ColorBlack)
 }
 
 // setupControls configures the control buttons
@@ -95,12 +95,12 @@ func (p *LogsPageView) setupControls() {
 	p.filterButton.SetSelectedFunc(func() {
 		p.toggleFilter()
 	})
-	
-	// Clear button setup  
+
+	// Clear button setup
 	p.clearButton.SetSelectedFunc(func() {
 		p.clearLogs()
 	})
-	
+
 	// Style the buttons
 	p.filterButton.SetBackgroundColor(tcell.ColorDarkBlue)
 	p.clearButton.SetBackgroundColor(tcell.ColorDarkRed)
@@ -111,6 +111,7 @@ func (p *LogsPageView) setupStatusBar() {
 	p.statusBar.SetDynamicColors(true)
 	p.statusBar.SetText("[grey]Press Tab to switch panels | f: Filter | c: Clear | ↑↓: Navigate[white]")
 	p.statusBar.SetBorder(true).SetBorderPadding(0, 0, 1, 1)
+	p.statusBar.SetBackgroundColor(tcell.ColorBlack)
 }
 
 // setupLayout creates the page layout
@@ -121,14 +122,16 @@ func (p *LogsPageView) setupLayout() {
 		AddItem(p.filterButton, 0, 1, false).
 		AddItem(tview.NewBox(), 1, 0, false). // Spacer
 		AddItem(p.clearButton, 0, 1, false)
-	
+	p.controlPanel.SetBackgroundColor(tcell.ColorBlack)
+
 	// Create main layout
 	p.view = tview.NewFlex().
 		SetDirection(tview.FlexRow).
 		AddItem(p.table, 0, 1, true).
 		AddItem(p.controlPanel, 3, 0, false).
 		AddItem(p.statusBar, 3, 0, false)
-	
+	p.view.SetBackgroundColor(tcell.ColorBlack)
+
 	// Handle input capture for navigation between components
 	p.view.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		switch event.Key() {
@@ -152,7 +155,7 @@ func (p *LogsPageView) GetView() tview.Primitive {
 func (p *LogsPageView) Refresh() {
 	// Clear existing rows (except header)
 	p.table.Clear()
-	
+
 	// Re-add headers
 	headers := []string{"Time", "Level", "Source", "Message"}
 	for i, header := range headers {
@@ -162,7 +165,7 @@ func (p *LogsPageView) Refresh() {
 			SetSelectable(false)
 		p.table.SetCell(0, i, cell)
 	}
-	
+
 	// Get logs based on filter
 	var logs []LogEntry
 	if p.showAllLevels {
@@ -170,20 +173,20 @@ func (p *LogsPageView) Refresh() {
 	} else {
 		logs = logger.GetEntriesByLevel(p.filterLevel)
 	}
-	
+
 	// Update table title with count
 	title := fmt.Sprintf(" System Logs (%d entries) ", len(logs))
 	p.table.SetTitle(title)
-	
+
 	// Add log entries
 	for i, log := range logs {
 		row := i + 1 // Account for header row
-		
+
 		// Time column
 		timeCell := tview.NewTableCell(log.Timestamp.Format("15:04:05.000")).
 			SetTextColor(tcell.ColorWhite)
 		p.table.SetCell(row, 0, timeCell)
-		
+
 		// Level column with color
 		levelCell := tview.NewTableCell(log.Level.String())
 		switch log.Level {
@@ -195,12 +198,12 @@ func (p *LogsPageView) Refresh() {
 			levelCell.SetTextColor(tcell.ColorRed)
 		}
 		p.table.SetCell(row, 1, levelCell)
-		
+
 		// Source column
 		sourceCell := tview.NewTableCell(log.Source).
 			SetTextColor(tcell.ColorWhite)
 		p.table.SetCell(row, 2, sourceCell)
-		
+
 		// Message column
 		message := log.Message
 		if log.Details != "" {
@@ -211,14 +214,14 @@ func (p *LogsPageView) Refresh() {
 			SetExpansion(1) // Allow message to expand
 		p.table.SetCell(row, 3, messageCell)
 	}
-	
+
 	// Update filter button text
 	if p.showAllLevels {
 		p.filterButton.SetLabel("Filter: All")
 	} else {
 		p.filterButton.SetLabel(fmt.Sprintf("Filter: %s", p.filterLevel.String()))
 	}
-	
+
 	p.updateStatusBar()
 }
 
