@@ -253,15 +253,22 @@ func main() {
 
 	answerQuestionTool := mcp.NewTool(
 		"answer_question",
-		mcp.WithDescription("Provide an answer to a question and/or wait for the next question. If question_id and answer are provided, submits the answer then returns the next question. If neither are provided, returns the next question. Blocks if no questions are available."),
+		mcp.WithDescription("Provide an answer to a question. A question can only be answered once and only once."),
 		mcp.WithString("question_id",
-			mcp.Description("Question ID to answer (optional on first call)"),
+			mcp.Required(),
+			mcp.Description("Question ID to answer"),
 		),
 		mcp.WithString("answer",
-			mcp.Description("Answer to the question (optional on first call)"),
+			mcp.Required(),
+			mcp.Description("Answer to the question"),
 		),
-		mcp.WithBoolean("wait_for_next",
-			mcp.Description("Whether to wait for the next question after submitting answer (default: true)"),
+	)
+
+	getNextQuestionTool := mcp.NewTool(
+		"get_next_question",
+		mcp.WithDescription("Wait for and retrieve the next question for this specialist. Blocks if no questions are available."),
+		mcp.WithBoolean("wait",
+			mcp.Description("Whether to wait for a question (default: true)"),
 		),
 		mcp.WithNumber("timeout",
 			mcp.Description("Timeout in milliseconds (optional, 0 = no timeout)"),
@@ -307,6 +314,7 @@ func main() {
 	// 🔗 Register agent communication tools
 	s.AddTool(registerSpecialistTool, handleRegisterSpecialist)
 	s.AddTool(answerQuestionTool, handleAnswerQuestion)
+	s.AddTool(getNextQuestionTool, handleGetNextQuestion)
 	s.AddTool(askSpecialistTool, handleAskSpecialist)
 	s.AddTool(listSpecialistsTool, handleListSpecialists)
 	s.AddTool(getAnswerTool, handleGetAnswer)

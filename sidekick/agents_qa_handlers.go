@@ -46,7 +46,7 @@ func handleRegisterSpecialist(ctx context.Context, request mcp.CallToolRequest) 
 	return mcp.NewToolResultText(string(resultBytes)), nil
 }
 
-// handleAnswerQuestion provides an answer to a previous question and/or waits for the next question
+// handleAnswerQuestion provides an answer to a question. A question can only be answered once and only once.
 func handleAnswerQuestion(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	// Extract session ID to find specialist
 	sessionID := ExtractSessionFromContext(ctx)
@@ -74,55 +74,71 @@ func handleAnswerQuestion(ctx context.Context, request mcp.CallToolRequest) (*mc
 		return mcp.NewToolResultError("No specialist registered for this session"), nil
 	}
 
-	// Get optional parameters
-	var questionID, answer string
-	var hasQuestionID, hasAnswer bool
+	// Get required parameters
+	questionID, err := request.RequireString("question_id")
+	if err != nil {
+		return mcp.NewToolResultError("Missing or invalid 'question_id' argument"), nil
+	}
 
-	if arguments, ok := request.Params.Arguments.(map[string]any); ok {
-		if qid, exists := arguments["question_id"]; exists {
-			if qidStr, ok := qid.(string); ok && qidStr != "" {
-				questionID = qidStr
-				hasQuestionID = true
-			}
-		}
+	answer, err := request.RequireString("answer")
+	if err != nil {
+		return mcp.NewToolResultError("Missing or invalid 'answer' argument"), nil
+	}
 
-		if ans, exists := arguments["answer"]; exists {
-			if ansStr, ok := ans.(string); ok && ansStr != "" {
-				answer = ansStr
-				hasAnswer = true
-			}
+	// Submit the answer
+	err = agentQARegistry.AnswerQuestion(questionID, answer, nil)
+	if err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	result := map[string]any{
+		"status":      "answer_submitted",
+		"question_id": questionID,
+	}
+
+	resultBytes, _ := json.Marshal(result)
+	return mcp.NewToolResultText(string(resultBytes)), nil
+}
+
+// handleGetNextQuestion waits for and retrieves the next question for this specialist
+func handleGetNextQuestion(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	// Extract session ID to find specialist
+	sessionID := ExtractSessionFromContext(ctx)
+
+	// Validate session is still active
+	if sessionID == "" {
+		return mcp.NewToolResultError("No active session found"), nil
+	}
+
+	// Check if session is still connected
+	if !sessionManager.IsSessionActive(sessionID) {
+		return mcp.NewToolResultError("Session is no longer active"), nil
+	}
+
+	// Find which specialty this session is registered for
+	var specialty string
+	for _, agent := range agentQARegistry.ListSpecialists() {
+		if agent.SessionID == sessionID {
+			specialty = agent.Specialty
+			break
 		}
 	}
 
-	// Get wait_for_next parameter (default: true)
-	waitForNext := true
+	if specialty == "" {
+		return mcp.NewToolResultError("No specialist registered for this session"), nil
+	}
+
+	// Get wait parameter (default: true)
+	wait := true
 	if arguments, ok := request.Params.Arguments.(map[string]any); ok {
-		if w, exists := arguments["wait_for_next"]; exists {
+		if w, exists := arguments["wait"]; exists {
 			if wBool, ok := w.(bool); ok {
-				waitForNext = wBool
+				wait = wBool
 			}
 		}
 	}
 
-	// If both question_id and answer are provided, submit the answer first
-	if hasQuestionID && hasAnswer {
-		err := agentQARegistry.AnswerQuestion(questionID, answer, nil)
-		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
-		}
-
-		// If we don't need to wait for the next question, return success immediately
-		if !waitForNext {
-			result := map[string]any{
-				"status":      "answer_submitted",
-				"question_id": questionID,
-			}
-			resultBytes, _ := json.Marshal(result)
-			return mcp.NewToolResultText(string(resultBytes)), nil
-		}
-	}
-
-	// Get timeout parameter
+	// Get timeout parameter (default: 0 = no timeout)
 	timeout := time.Duration(0)
 	if arguments, ok := request.Params.Arguments.(map[string]any); ok {
 		if t, exists := arguments["timeout"]; exists {
@@ -133,6 +149,25 @@ func handleAnswerQuestion(ctx context.Context, request mcp.CallToolRequest) (*mc
 				}
 			}
 		}
+	}
+
+	// If not waiting, check if there's a question immediately available
+	if !wait {
+		// Try to get a question without blocking
+		qa, err := agentQARegistry.WaitForQuestionWithContext(ctx, specialty, 1*time.Millisecond)
+		if err != nil {
+			return mcp.NewToolResultError("No questions available"), nil
+		}
+
+		result := map[string]any{
+			"question_id": qa.ID,
+			"from":        qa.From,
+			"question":    qa.Question,
+			"timestamp":   qa.Timestamp.Format(time.RFC3339),
+		}
+
+		resultBytes, _ := json.Marshal(result)
+		return mcp.NewToolResultText(string(resultBytes)), nil
 	}
 
 	// Create a context that respects both the request context and session context

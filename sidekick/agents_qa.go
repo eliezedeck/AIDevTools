@@ -272,7 +272,7 @@ func (r *AgentQARegistry) WaitForQuestionWithContext(ctx context.Context, specia
 	}
 }
 
-// AnswerQuestion provides an answer to a question
+// AnswerQuestion provides an answer to a question. A question can only be answered once and only once.
 func (r *AgentQARegistry) AnswerQuestion(questionID, answer string, err error) error {
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
@@ -281,6 +281,20 @@ func (r *AgentQARegistry) AnswerQuestion(questionID, answer string, err error) e
 	qa, exists := r.qaHistory[questionID]
 	if !exists {
 		return fmt.Errorf("question ID '%s' not found", questionID)
+	}
+
+	// Check if question has already been answered
+	if qa.Status == QAStatusCompleted {
+		return fmt.Errorf("question ID '%s' has already been answered", questionID)
+	}
+
+	if qa.Status == QAStatusFailed {
+		return fmt.Errorf("question ID '%s' has already failed and cannot be answered", questionID)
+	}
+
+	// Only allow answering questions that are in processing or pending status
+	if qa.Status != QAStatusProcessing && qa.Status != QAStatusPending {
+		return fmt.Errorf("question ID '%s' is in status '%s' and cannot be answered", questionID, qa.Status)
 	}
 
 	// Update Q&A entry
@@ -498,11 +512,8 @@ func (r *AgentQARegistry) startCleanupRoutine() {
 		ticker := time.NewTicker(1 * time.Hour) // Run cleanup every hour
 		defer ticker.Stop()
 
-		for {
-			select {
-			case <-ticker.C:
-				r.cleanupExpiredEntries()
-			}
+		for range ticker.C {
+			r.cleanupExpiredEntries()
 		}
 	}()
 }
