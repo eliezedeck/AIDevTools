@@ -40,7 +40,9 @@
       "Bash(sed:*)",
       "WebFetch(domain:pkg.go.dev)",
       "Bash(true)",
-      "WebFetch(domain:raw.githubusercontent.com)"
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(go list:*)",
+      "Bash(./build.sh)"
     ],
     "deny": []
   }

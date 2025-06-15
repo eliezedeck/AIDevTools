@@ -1,671 +1,94 @@
-# AIDevTools - Sidekick MCP Server
+# AIDevTools
 
-<div align="center">
+MCP servers and tools for AI-powered development.
 
-[![CI](https://github.com/eliezedeck/AIDevTools/workflows/CI/badge.svg)](https://github.com/eliezedeck/AIDevTools/actions)
-[![Release](https://img.shields.io/github/v/release/eliezedeck/AIDevTools)](https://github.com/eliezedeck/AIDevTools/releases)
-[![Go Version](https://img.shields.io/badge/go-1.23+-blue.svg)](https://golang.org)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+## Components
 
-**Production-ready MCP server for AI agent process management and notifications**  
-*Part of the AIDevTools ecosystem for AI-powered development*
+### 🚀 Sidekick
+Process management and notification MCP server for AI agents.
 
-[🚀 Quick Start](#-quick-start) • [⭐ Features](#-features) • [📦 Installation](#-installation) • [🛠️ API Reference](#-api-reference) • [🤝 Contributing](#-contributing)
+**Features:**
+- Spawn and manage long-running processes
+- Real-time output streaming with ring buffers
+- Interactive process control (stdin/stdout/stderr)
+- Audio notifications (macOS)
+- TUI mode for visual process monitoring
+- Cross-platform: Linux, macOS, Windows
 
-</div>
-
----
-
-## 📋 Table of Contents
-
-- [Overview](#-overview)
-- [Quick Start](#-quick-start)
-- [Features](#-features)
-- [Installation](#-installation)
-- [Configuration](#-configuration)
-- [API Reference](#-api-reference)
-- [Examples](#-examples)
-- [Performance](#-performance)
-- [Security](#-security)
-- [Contributing](#-contributing)
-- [Support](#-support)
-- [License](#-license)
-
-## 🎯 Overview
-
-**Sidekick** is a high-performance [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server that provides AI agents with powerful process management and notification capabilities. Part of the **AIDevTools** ecosystem - a collection of tools designed to enhance AI-powered software development workflows.
-
-Built specifically for [Claude Code](https://claude.ai/code) and other MCP-compatible AI systems, Sidekick enables AI agents to spawn, monitor, and control system processes with enterprise-grade reliability.
-
-## 🚀 Quick Start
-
-### 30-Second Installation
-
+**Install:**
 ```bash
-# Install Sidekick
-curl -sSL https://raw.githubusercontent.com/eliezedeck/AIDevTools/main/install.sh | bash
-
-# Add to Claude Code
-claude mcp add sidekick ~/.local/bin/sidekick
-
-# Done! Tools are auto-discovered and ready to use
+curl -sSL https://raw.githubusercontent.com/eliezedeck/AIDevTools/main/sidekick/install.sh | bash
 ```
 
-### Verify Installation
-
+**Usage:**
 ```bash
-# Check if Sidekick is available
-sidekick --version
-
-# Verify MCP registration
-claude mcp list
-```
-
-### Why Sidekick?
-
-- **🚀 Production Ready**: Thread-safe, memory-efficient, with automatic cleanup
-- **🔄 Real-time Process Management**: Spawn, monitor, and control long-running processes
-- **📱 Smart Notifications**: Audio alerts with TTS on macOS for task completion
-- **🎛️ Advanced Control**: Ring buffers, stdin input, process groups, graceful shutdown
-- **🌍 Cross-platform**: Process management works everywhere, notifications on macOS
-- **⚡ High Performance**: 10MB ring buffers, efficient memory management, concurrent operations
-
-## ⭐ Features
-
-### 🔧 **Process Management**
-- **Multi-platform Support**: Linux, macOS, Windows
-- **Ring Buffer Output**: Configurable 10MB buffers prevent memory bloat
-- **Real-time Monitoring**: "tail -f" style incremental output streaming
-- **Process Groups**: Proper child process cleanup and isolation
-- **Stdin Support**: Interactive process control with input forwarding
-- **Smart Delays**: Async/sync process spawning with configurable delays
-- **Batch Operations**: Launch multiple processes with individual configurations
-
-### 🌐 **Transport Modes**
-- **Stdio Transport**: Traditional MCP server mode for Claude Code
-- **SSE Transport**: HTTP-based Server-Sent Events for web clients
-- **Session Management**: Automatic process cleanup on client disconnect
-- **Multi-client Support**: Each SSE client gets isolated process space
-
-### 🖥️ **Terminal User Interface** *(v0.3.0+)*
-- **Process Monitoring**: Real-time hierarchical tree view of all processes
-- **Interactive Control**: Kill processes, send input, view detailed output
-- **Notifications Panel**: View and manage notification history
-- **Graceful Shutdown**: Visual progress during 3-second termination period
-- **Keyboard Navigation**: Efficient control with hotkeys and shortcuts
-
-### 📢 **Audio Notifications** *(macOS Only)*
-- **System Integration**: Native `afplay` and `say` command integration
-- **Concurrent Playback**: Non-blocking audio and speech synthesis
-- **Smart Limits**: 50-word limit with validation for clarity
-
-### 🔒 **Enterprise Features**
-- **Thread-safe Operations**: Concurrent process management with proper locking
-- **Automatic Cleanup**: Background process monitoring with 1-hour timeout
-- **Graceful Shutdown**: SIGTERM followed by SIGKILL for clean termination
-- **Memory Management**: Ring buffers with automatic old data discarding
-- **Error Handling**: Comprehensive error reporting and recovery
-
-## 📦 Installation
-
-### More Installation Options
-
-Besides the quick install shown above, you have several options:
-
-#### Option 1: Force Build from Source
-
-```bash
-# Build from source instead of downloading pre-built binary
-curl -sSL https://raw.githubusercontent.com/eliezedeck/AIDevTools/main/install.sh | bash -s -- --force-build-from-source
-```
-
-#### Option 2: Download Pre-built Binary Manually
-
-```bash
-# macOS (Apple Silicon)
-curl -L https://github.com/eliezedeck/AIDevTools/releases/latest/download/sidekick-darwin-arm64.tar.gz | tar -xz
-
-# macOS (Intel)
-curl -L https://github.com/eliezedeck/AIDevTools/releases/latest/download/sidekick-darwin-amd64.tar.gz | tar -xz
-
-# Linux (x86_64)
-curl -L https://github.com/eliezedeck/AIDevTools/releases/latest/download/sidekick-linux-amd64.tar.gz | tar -xz
-
-# Linux (ARM64)
-curl -L https://github.com/eliezedeck/AIDevTools/releases/latest/download/sidekick-linux-arm64.tar.gz | tar -xz
-
-# Move to PATH
-sudo mv sidekick-* /usr/local/bin/sidekick
-chmod +x /usr/local/bin/sidekick
-```
-
-#### Option 3: Build from Source Manually
-
-```bash
-# Prerequisites: Go 1.23+
-git clone https://github.com/eliezedeck/AIDevTools.git
-cd AIDevTools/sidekick
-go build -o sidekick main.go processes.go notifications.go
-
-# Install to system
-sudo mv sidekick /usr/local/bin/
-```
-
-#### Option 4: Package Managers
-
-```bash
-# Homebrew (coming soon)
-brew install eliezedeck/tap/sidekick
-
-# Go install
-go install github.com/eliezedeck/AIDevTools/sidekick@latest
-```
-
-## ⚙️ Configuration
-
-### Running Modes
-
-Sidekick supports two transport modes:
-
-#### 1. **TUI Mode** (Default)
-Interactive Terminal User Interface with SSE transport, perfect for development and monitoring.
-
-```bash
-# Start with default TUI mode (SSE + TUI on port 5050)
+# TUI mode (default)
 sidekick
 
-# Custom host and port
-sidekick --host 0.0.0.0 --port 3000
-
-# Disable TUI (SSE only)
-sidekick --tui=false
-
-# SSE endpoints:
-# - SSE stream: http://localhost:5050/mcp/sse
-# - Messages: http://localhost:5050/mcp/message
-```
-
-#### 2. **Stdio Mode**
-Traditional MCP server mode, perfect for Claude Code integration.
-
-```bash
-# Stdio mode (disable SSE)
+# Stdio mode for Claude Desktop
 sidekick --sse=false
 
-# Basic Claude Code setup
-claude mcp add sidekick sidekick
-
-# With custom environment variables
-claude mcp add sidekick -e SIDEKICK_BUFFER_SIZE=20971520 sidekick
-
-# With custom scope (if needed)
-claude mcp add sidekick --scope filesystem sidekick
+# Add to Claude Desktop
+claude mcp add sidekick ~/.local/bin/sidekick
 ```
 
-**TUI/SSE Mode Features:**
-- 🖥️ **Interactive TUI**: Visual process management with real-time monitoring (default)
-- 🔐 **Session Management**: Each client connection gets a unique session
-- 🧹 **Auto-cleanup**: Processes are automatically killed when client disconnects
-- 🌐 **HTTP Transport**: Works with web-based AI agents and custom integrations
-- 📡 **Real-time Updates**: Server-Sent Events for streaming process output
+### 🌉 StdioBridge
+Proxy between stdio-based MCP clients and SSE-based MCP servers.
 
-### Environment Variables
+**Features:**
+- Connect Claude Desktop to SSE-only MCP servers
+- Automatic tool discovery and proxying
+- Transparent request/response forwarding
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `SIDEKICK_BUFFER_SIZE` | `10485760` | Default ring buffer size (10MB) |
-| `SIDEKICK_CLEANUP_INTERVAL` | `900` | Process cleanup interval (15 min) |
-| `SIDEKICK_PROCESS_TIMEOUT` | `3600` | Process timeout (1 hour) |
-
-### Verification
-
+**Install:**
 ```bash
-# Test MCP connection
-claude mcp list
-
-# Test a simple command
-# In Claude Code: "spawn a process that echoes hello world"
+curl -sSL https://raw.githubusercontent.com/eliezedeck/AIDevTools/main/stdiobridge/install.sh | bash
 ```
 
-## 🛠️ API Reference
-
-### Tool Overview
-
-| Platform | Tools Available | Count |
-|----------|----------------|-------|
-| **macOS** | Process Management + Audio Notifications | 9 |
-| **Linux/Windows** | Process Management Only | 8 |
-
-### 🔧 Process Management Tools
-
-#### `spawn_process`
-
-Spawn and track a new process with configurable options.
-
-```json
-{
-  "tool": "spawn_process",
-  "args": {
-    "command": "npm",
-    "args": ["run", "dev"],
-    "name": "frontend-server",
-    "working_dir": "/path/to/project",
-    "buffer_size": 10485760,
-    "delay": 2000,
-    "sync_delay": false
-  }
-}
-```
-
-**Parameters:**
-- `command` *(required)*: Command to execute
-- `args`: Command arguments array
-- `name`: Human-readable process name
-- `working_dir`: Working directory
-- `env`: Environment variables object
-- `buffer_size`: Ring buffer size in bytes (default: 10MB)
-- `delay`: Delay before execution (ms, max: 5 minutes)
-- `sync_delay`: Wait for delay vs return immediately (default: false)
-
-#### `spawn_multiple_processes`
-
-Launch multiple processes with individual configurations and sequential delays.
-
-```json
-{
-  "tool": "spawn_multiple_processes", 
-  "args": {
-    "processes": [
-      {
-        "command": "redis-server",
-        "name": "cache"
-      },
-      {
-        "command": "python",
-        "args": ["manage.py", "runserver"],
-        "name": "api-server",
-        "delay": 3000
-      }
-    ]
-  }
-}
-```
-
-#### `get_partial_process_output`
-
-Get incremental output since last read (tail -f functionality).
-
-```json
-{
-  "tool": "get_partial_process_output",
-  "args": {
-    "process_id": "abc-123",
-    "streams": "both",
-    "max_lines": 50,
-    "delay": 2000
-  }
-}
-```
-
-#### `get_full_process_output`
-
-Get complete process output currently in memory.
-
-```json
-{
-  "tool": "get_full_process_output",
-  "args": {
-    "process_id": "abc-123",
-    "streams": "stdout"
-  }
-}
-```
-
-#### `send_process_input`
-
-Send input to a running process's stdin.
-
-```json
-{
-  "tool": "send_process_input",
-  "args": {
-    "process_id": "abc-123",
-    "input": "yes\\n"
-  }
-}
-```
-
-#### `list_processes`
-
-List all tracked processes and their status.
-
-```json
-{
-  "tool": "list_processes",
-  "args": {}
-}
-```
-
-#### `kill_process`
-
-Terminate a tracked process.
-
-```json
-{
-  "tool": "kill_process",
-  "args": {
-    "process_id": "abc-123"
-  }
-}
-```
-
-#### `get_process_status`
-
-Get detailed status information about a process.
-
-```json
-{
-  "tool": "get_process_status",
-  "args": {
-    "process_id": "abc-123"
-  }
-}
-```
-
-### 📢 Audio Notifications *(macOS Only)*
-
-#### `notifications_speak`
-
-Play system sound and speak text using macOS TTS.
-
-```json
-{
-  "tool": "notifications_speak",
-  "args": {
-    "text": "Build completed successfully!"
-  }
-}
-```
-
-**Parameters:**
-- `text` *(required)*: Text to speak (max 50 words)
-
-### Terminal User Interface (TUI)
-
-The TUI mode provides a visual interface for managing processes:
-
+**Usage:**
 ```bash
-# Start Sidekick with TUI
-sidekick --sse --tui
+# Bridge to an SSE server
+stdiobridge --sse-url http://localhost:5050/sse
+
+# Add to Claude Desktop
+claude mcp add my-sse-server ~/.local/bin/stdiobridge --args "--sse-url" "http://localhost:5050/sse"
 ```
 
-**TUI Features:**
-- **Process Tree View**: Hierarchical display organized by session
-- **Real-time Updates**: Live process status and output monitoring  
-- **Keyboard Navigation**:
-  - `Tab`/`Shift+Tab`: Switch between panels
-  - `↑`/`↓`: Navigate process list
-  - `Enter`: View process details
-  - `k`: Kill selected process
-  - `1`: Switch to Processes page
-  - `2`: Switch to Notifications page
-  - `Q`: Quit (with confirmation)
-- **Process Details**: View stdout/stderr, send input, monitor status
-- **Notifications Panel**: History of all audio notifications (macOS)
-- **Graceful Shutdown**: Visual countdown when terminating processes
+## Requirements
 
-## 💡 Examples
+- Go 1.23+ (for building from source)
+- Claude Desktop or other MCP-compatible clients
 
-### Development Server Management
-
-```javascript
-// Start a development stack
-await mcp.call("spawn_multiple_processes", {
-  processes: [
-    {
-      command: "redis-server",
-      name: "cache",
-      delay: 0
-    },
-    {
-      command: "npm",
-      args: ["run", "api:dev"],
-      name: "api-server",
-      working_dir: "/path/to/api",
-      delay: 2000
-    },
-    {
-      command: "npm", 
-      args: ["run", "dev"],
-      name: "frontend",
-      working_dir: "/path/to/frontend",
-      delay: 5000
-    }
-  ]
-});
-```
-
-### Long-running Process Monitoring
-
-```javascript
-// Monitor build process
-const result = await mcp.call("spawn_process", {
-  command: "npm",
-  args: ["run", "build"],
-  name: "production-build"
-});
-
-const processId = result.process_id;
-
-// Get incremental output
-const output = await mcp.call("get_partial_process_output", {
-  process_id: processId,
-  delay: 3000,
-  max_lines: 100
-});
-```
-
-### Interactive Process Control
-
-```javascript
-// Start interactive process
-const proc = await mcp.call("spawn_process", {
-  command: "python",
-  args: ["-i"],
-  name: "python-repl"
-});
-
-// Send commands
-await mcp.call("send_process_input", {
-  process_id: proc.process_id,
-  input: "print('Hello from Sidekick!')\\n"
-});
-
-// Get output
-const output = await mcp.call("get_partial_process_output", {
-  process_id: proc.process_id
-});
-```
-
-### Completion Notifications *(macOS)*
-
-```javascript
-// Notify when task completes
-await mcp.call("notifications_speak", {
-  text: "Database migration completed successfully"
-});
-```
-
-### SSE Mode Integration
-
-```javascript
-// Connect to SSE server
-const eventSource = new EventSource('http://localhost:5050/mcp/sse');
-const sessionId = null;
-
-eventSource.onmessage = (event) => {
-  const message = JSON.parse(event.data);
-  if (message.endpoint) {
-    sessionId = message.endpoint.split('/').pop();
-  }
-};
-
-// Send MCP request
-async function callTool(method, params) {
-  const response = await fetch('http://localhost:5050/mcp/message', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      jsonrpc: '2.0',
-      id: Date.now(),
-      method: method,
-      params: params
-    })
-  });
-  return response.json();
-}
-
-// Spawn a process (will be auto-cleaned on disconnect)
-const result = await callTool('tools/call', {
-  name: 'spawn_process',
-  arguments: {
-    command: 'npm',
-    args: ['run', 'dev']
-  }
-});
-```
-
-## ⚡ Performance
-
-### Benchmarks
-
-| Metric | Value | Description |
-|--------|-------|-------------|
-| **Memory per Process** | ~50KB | Base overhead per tracked process |
-| **Ring Buffer Default** | 10MB | Configurable per process |
-| **Max Concurrent Processes** | 1000+ | Limited by system resources |
-| **Output Throughput** | 100MB/s+ | Ring buffer write performance |
-| **Cleanup Frequency** | 15 min | Background process monitoring |
-
-### Memory Management
-
-- **Ring Buffers**: Automatic old data eviction prevents memory leaks
-- **Process Cleanup**: 1-hour timeout for inactive processes
-- **Efficient Storage**: Only store essential process metadata
-- **Concurrent Safe**: Lock-free reads with minimal write contention
-
-### Scalability
-
-```bash
-# Stress test (spawns 100 concurrent processes)
-for i in {1..100}; do
-  sidekick spawn "sleep 60" &
-done
-```
-
-## 🔒 Security
-
-### Security Model
-
-- **Process Isolation**: Each process runs in its own process group
-- **No Privilege Escalation**: Processes inherit Sidekick's permissions
-- **Local Communication**: stdio transport, no network exposure
-- **Input Validation**: All MCP inputs validated and sanitized
-- **Resource Limits**: Ring buffers prevent unbounded memory growth
-
-### Best Practices
-
-```bash
-# Run with minimal permissions
-sudo -u app-user sidekick
-
-# Use process limits
-ulimit -u 100  # Limit process count
-ulimit -v 1000000  # Limit virtual memory
-```
-
-### Vulnerability Reporting
-
-Found a security issue? Please see our [Security Policy](SECURITY.md) for responsible disclosure.
-
-## 🧪 Development
-
-### Prerequisites
-
-- Go 1.23 or later
-- Git
-- macOS (for audio notification testing)
-
-### Building
+## Building from Source
 
 ```bash
 git clone https://github.com/eliezedeck/AIDevTools.git
 cd AIDevTools
-make build  # or: cd sidekick && go build
+
+# Build sidekick
+cd sidekick && go build
+
+# Build stdiobridge
+cd ../stdiobridge && go build
 ```
 
-### Testing
+## API Reference
 
-```bash
-make test           # Run all tests
-make test-race      # Race condition detection
-make test-coverage  # Coverage report
-```
+### Sidekick Tools
 
-### Contributing
+**Process Management:**
+- `spawn_process` - Start a new process with options
+- `spawn_multiple_processes` - Launch multiple processes
+- `get_partial_process_output` - Get incremental output (tail -f)
+- `get_full_process_output` - Get all output in memory
+- `send_process_input` - Send stdin input
+- `list_processes` - List all tracked processes
+- `kill_process` - Terminate a process
+- `get_process_status` - Get detailed process info
 
-We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
+**Notifications (macOS):**
+- `notifications_speak` - Play sound and speak text (max 50 words)
 
-#### Quick Contributing Steps
+## License
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Make your changes
-4. Add tests for new functionality
-5. Ensure all tests pass (`make test`)
-6. Commit your changes (`git commit -m 'feat: add amazing feature'`)
-7. Push to the branch (`git push origin feature/amazing-feature`)
-8. Open a Pull Request
-
-## 📊 Roadmap
-
-- [x] **v0.2.0**: SSE transport mode with session-based process lifecycle management
-- [x] **v0.3.0**: Terminal User Interface (TUI) with process monitoring and control
-- [ ] **v0.4.0**: Process templates and saved configurations
-- [ ] **v0.5.0**: Distributed process management
-- [ ] **v0.6.0**: Plugin system for custom tools
-
-## 🤝 Support
-
-### Getting Help
-
-- 📖 **Documentation**: Check this README and [Contributing Guide](CONTRIBUTING.md)
-- 🐛 **Bug Reports**: [Create an issue](https://github.com/eliezedeck/AIDevTools/issues/new?template=bug_report.yml)
-- 💡 **Feature Requests**: [Request a feature](https://github.com/eliezedeck/AIDevTools/issues/new?template=feature_request.yml)
-- 💬 **Discussions**: [GitHub Discussions](https://github.com/eliezedeck/AIDevTools/discussions)
-
-### Community
-
-- 🌟 **Star this repo** if you find it helpful
-- 🐦 **Follow updates** on Twitter [@eliezedeck](https://twitter.com/eliezedeck)
-- 📢 **Share** with the AI development community
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 🙏 Acknowledgments
-
-- [mark3labs/mcp-go](https://github.com/mark3labs/mcp-go) - Excellent MCP implementation for Go
-- [Model Context Protocol](https://modelcontextprotocol.io/) - The protocol that makes AI tool integration possible
-- [Claude Code](https://claude.ai/code) - The AI development environment that inspired this project
-
----
-
-<div align="center">
-
-**Built with ❤️ for the AI development community**
-
-[⭐ Star](https://github.com/eliezedeck/AIDevTools) • [🐛 Report Bug](https://github.com/eliezedeck/AIDevTools/issues) • [💡 Request Feature](https://github.com/eliezedeck/AIDevTools/issues) • [📖 Docs](https://github.com/eliezedeck/AIDevTools#readme)
-
-</div>
+MIT License - see [LICENSE](LICENSE) file for details.

@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "sidekick-via-bridge": {
+      "command": "/path/to/stdiobridge",
+      "args": ["--sse-url", "http://localhost:5050/sse", "--name", "Sidekick Bridge"]
+    }
+  }
+}
