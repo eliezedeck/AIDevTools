@@ -21,6 +21,7 @@ const (
 	ProcessDetailPage
 	NotificationsPage
 	LogsPage
+	AgentsQAPage
 )
 
 // TUIApp represents the main TUI application - IDIOMATIC IMPLEMENTATION
@@ -31,6 +32,7 @@ type TUIApp struct {
 	processDetailPage *ProcessDetailPageView
 	notificationsPage *NotificationsPageView
 	logsPage          *LogsPageView
+	agentsQAPage      *AgentsQAPageView
 	currentPage       PageType
 	ctx               context.Context
 	cancel            context.CancelFunc
@@ -67,12 +69,14 @@ func NewTUIApp() *TUIApp {
 	tuiApp.processDetailPage = NewProcessDetailPageView(tuiApp)
 	tuiApp.notificationsPage = NewNotificationsPageView(tuiApp)
 	tuiApp.logsPage = NewLogsPageView(tuiApp)
+	tuiApp.agentsQAPage = NewAgentsQAPageView(tuiApp)
 
 	// Add pages to the page container
 	tuiApp.pages.AddPage("processes", tuiApp.processesPage.GetView(), true, true)
 	tuiApp.pages.AddPage("process_detail", tuiApp.processDetailPage.GetView(), true, false)
 	tuiApp.pages.AddPage("notifications", tuiApp.notificationsPage.GetView(), true, false)
 	tuiApp.pages.AddPage("logs", tuiApp.logsPage.GetView(), true, false)
+	tuiApp.pages.AddPage("agents_qa", tuiApp.agentsQAPage.GetView(), true, false)
 
 	// Set up the main layout
 	tuiApp.app.SetRoot(tuiApp.pages, true)
@@ -140,6 +144,9 @@ func (t *TUIApp) handleGlobalKeys(event *tcell.EventKey) *tcell.EventKey {
 		case '3':
 			t.SwitchToPage(LogsPage)
 			return nil
+		case '4':
+			t.SwitchToPage(AgentsQAPage)
+			return nil
 		case 'q', 'Q':
 			// Show quit confirmation dialog
 			ShowQuitConfirmation(t.app, t.pages, func() {
@@ -175,6 +182,8 @@ func (t *TUIApp) switchToNextPage() {
 	case NotificationsPage:
 		t.SwitchToPage(LogsPage)
 	case LogsPage:
+		t.SwitchToPage(AgentsQAPage)
+	case AgentsQAPage:
 		t.SwitchToPage(ProcessesPage)
 	case ProcessDetailPage:
 		t.SwitchToPage(ProcessesPage)
@@ -185,11 +194,13 @@ func (t *TUIApp) switchToNextPage() {
 func (t *TUIApp) switchToPrevPage() {
 	switch t.currentPage {
 	case ProcessesPage:
-		t.SwitchToPage(LogsPage)
+		t.SwitchToPage(AgentsQAPage)
 	case NotificationsPage:
 		t.SwitchToPage(ProcessesPage)
 	case LogsPage:
 		t.SwitchToPage(NotificationsPage)
+	case AgentsQAPage:
+		t.SwitchToPage(LogsPage)
 	case ProcessDetailPage:
 		t.SwitchToPage(ProcessesPage)
 	}
@@ -212,6 +223,9 @@ func (t *TUIApp) SwitchToPage(page PageType) {
 	case LogsPage:
 		t.pages.SwitchToPage("logs")
 		t.logsPage.Refresh()
+	case AgentsQAPage:
+		t.pages.SwitchToPage("agents_qa")
+		t.agentsQAPage.Refresh()
 	}
 
 	t.app.SetFocus(t.pages)
@@ -242,6 +256,8 @@ func (t *TUIApp) updateRoutine() {
 						t.processDetailPage.Update()
 					case NotificationsPage:
 						t.notificationsPage.Update()
+					case AgentsQAPage:
+						t.agentsQAPage.Update()
 					}
 				})
 				t.lastUpdateTime = time.Now()

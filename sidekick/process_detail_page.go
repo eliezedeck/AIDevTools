@@ -84,7 +84,7 @@ func (p *ProcessDetailPageView) setupInputField() {
 // setupStatusBar configures the status bar
 func (p *ProcessDetailPageView) setupStatusBar() {
 	p.statusBar.SetBorder(true).SetTitle(" Controls ").SetTitleAlign(tview.AlignLeft)
-	p.statusBar.SetText("[yellow]Tab[white]: Switch Focus | [yellow]Enter[white]: Send Input | [yellow]S[white]: Toggle Auto-scroll | [yellow]Esc[white]: Back | [yellow]Q[white]: Quit")
+	p.statusBar.SetText("[yellow]Tab[white]: Switch Focus | [yellow]Enter[white]: Send Input | [yellow]S[white]: Toggle Auto-scroll | [yellow]Esc[white]: Back | [yellow]Q[white]: Quit\n[grey]Pages: [yellow]1[white]: Processes | [yellow]2[white]: Notifications | [yellow]3[white]: Logs | [yellow]4[white]: Agents Q&A[grey]")
 	p.statusBar.SetTextAlign(tview.AlignCenter)
 	p.statusBar.SetDynamicColors(true)
 }
@@ -95,7 +95,7 @@ func (p *ProcessDetailPageView) setupLayout() {
 		AddItem(p.infoPanel, 7, 0, false).
 		AddItem(p.logView, 0, 1, true).
 		AddItem(p.inputField, 3, 0, false).
-		AddItem(p.statusBar, 3, 0, false)
+		AddItem(p.statusBar, 4, 0, false)
 	
 	// Set up global key handlers for the main view
 	p.view.SetInputCapture(p.handleGlobalKeys)

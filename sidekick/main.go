@@ -234,6 +234,61 @@ func main() {
 	s.AddTool(killProcessTool, handleKillProcess)
 	s.AddTool(getProcessStatusTool, handleGetProcessStatus)
 
+	// 🤝 Define agent communication tools
+	registerSpecialistTool := mcp.NewTool(
+		"register_specialist",
+		mcp.WithDescription("Register as a specialist agent that can answer questions"),
+		mcp.WithString("name",
+			mcp.Required(),
+			mcp.Description("Agent name"),
+		),
+		mcp.WithString("specialty",
+			mcp.Required(),
+			mcp.Description("Specialty area (e.g., 'codebase', 'testing', 'security')"),
+		),
+	)
+
+	answerQuestionTool := mcp.NewTool(
+		"answer_question",
+		mcp.WithDescription("Provide an answer to a question and/or wait for the next question. If question_id and answer are provided, submits the answer then returns the next question. If neither are provided, returns the next question. Blocks if no questions are available."),
+		mcp.WithString("question_id",
+			mcp.Description("Question ID to answer (optional on first call)"),
+		),
+		mcp.WithString("answer",
+			mcp.Description("Answer to the question (optional on first call)"),
+		),
+		mcp.WithNumber("timeout",
+			mcp.Description("Timeout in milliseconds (optional, 0 = no timeout)"),
+		),
+	)
+
+	askSpecialistTool := mcp.NewTool(
+		"ask_specialist",
+		mcp.WithDescription("Ask a question to a specialist agent"),
+		mcp.WithString("specialty",
+			mcp.Required(),
+			mcp.Description("Specialty to ask (e.g., 'codebase', 'testing', 'security')"),
+		),
+		mcp.WithString("question",
+			mcp.Required(),
+			mcp.Description("Question to ask"),
+		),
+		mcp.WithNumber("timeout",
+			mcp.Description("Timeout in milliseconds (optional, default 30000)"),
+		),
+	)
+
+	listSpecialistsTool := mcp.NewTool(
+		"list_specialists",
+		mcp.WithDescription("List all available specialist agents"),
+	)
+
+	// 🔗 Register agent communication tools
+	s.AddTool(registerSpecialistTool, handleRegisterSpecialist)
+	s.AddTool(answerQuestionTool, handleAnswerQuestion)
+	s.AddTool(askSpecialistTool, handleAskSpecialist)
+	s.AddTool(listSpecialistsTool, handleListSpecialists)
+
 	// 🚦 Setup signal handling for graceful shutdown
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
