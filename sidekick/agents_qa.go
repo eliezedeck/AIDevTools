@@ -31,6 +31,7 @@ type QuestionAnswer struct {
 	Status         QAStatus
 	Timestamp      time.Time
 	ProcessingTime time.Duration
+	ExpiresAt      time.Time // When this Q&A entry expires (6 hours after creation)
 }
 
 // SpecialistAgent represents a registered specialist agent
@@ -38,6 +39,7 @@ type SpecialistAgent struct {
 	ID        string
 	Name      string
 	Specialty string
+	RootDir   string // Root directory of the project this specialist is specialized in
 	SessionID string // MCP session ID
 	ProcessID string // If spawned via sidekick
 	Status    string // "available", "busy", "offline"
@@ -54,16 +56,19 @@ type AgentQARegistry struct {
 
 // NewAgentQARegistry creates a new agent Q&A registry
 func NewAgentQARegistry() *AgentQARegistry {
-	return &AgentQARegistry{
+	r := &AgentQARegistry{
 		specialists: make(map[string]*SpecialistAgent),
 		qaHistory:   make(map[string]*QuestionAnswer),
 		qaQueues:    make(map[string]chan *QuestionAnswer),
 		waiters:     make(map[string]chan *QuestionAnswer),
 	}
+	// Start cleanup routine for expired Q&A entries
+	r.startCleanupRoutine()
+	return r
 }
 
 // RegisterSpecialist registers a specialist agent
-func (r *AgentQARegistry) RegisterSpecialist(name, specialty, sessionID string) (*SpecialistAgent, error) {
+func (r *AgentQARegistry) RegisterSpecialist(name, specialty, rootDir, sessionID string) (*SpecialistAgent, error) {
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
 
@@ -76,6 +81,7 @@ func (r *AgentQARegistry) RegisterSpecialist(name, specialty, sessionID string) 
 		ID:        uuid.New().String(),
 		Name:      name,
 		Specialty: specialty,
+		RootDir:   rootDir,
 		SessionID: sessionID,
 		Status:    "available",
 	}
@@ -160,6 +166,7 @@ func (r *AgentQARegistry) AskQuestion(from, specialty, question string, timeout 
 		Question:  question,
 		Status:    QAStatusPending,
 		Timestamp: time.Now(),
+		ExpiresAt: time.Now().Add(6 * time.Hour), // Expires after 6 hours
 	}
 
 	// Store in history
@@ -342,6 +349,177 @@ func (r *AgentQARegistry) CleanupForSession(sessionID string) {
 			LogInfo("AgentQA", fmt.Sprintf("Cleaned up specialist '%s' for session %s", agent.Name, sessionID))
 		}
 	}
+}
+
+// AskQuestionAsync submits a question to a specialist and returns immediately with question ID
+func (r *AgentQARegistry) AskQuestionAsync(from, specialty, question string) (*QuestionAnswer, error) {
+	r.mutex.Lock()
+
+	// Check if specialist exists
+	specialist := r.specialists[specialty]
+	if specialist == nil {
+		r.mutex.Unlock()
+		return nil, fmt.Errorf("no specialist registered for '%s'", specialty)
+	}
+
+	// Get the queue for this specialty
+	queue, exists := r.qaQueues[specialty]
+	if !exists {
+		r.mutex.Unlock()
+		return nil, fmt.Errorf("no queue for specialty '%s'", specialty)
+	}
+
+	// Create Q&A entry
+	qa := &QuestionAnswer{
+		ID:        uuid.New().String(),
+		From:      from,
+		To:        specialist.Name,
+		Question:  question,
+		Status:    QAStatusPending,
+		Timestamp: time.Now(),
+		ExpiresAt: time.Now().Add(6 * time.Hour), // Expires after 6 hours
+	}
+
+	// Store in history
+	r.qaHistory[qa.ID] = qa
+
+	// Create response channel for future use
+	responseChan := make(chan *QuestionAnswer, 1)
+	r.waiters[qa.ID] = responseChan
+
+	r.mutex.Unlock()
+
+	// Send question to specialist's queue
+	select {
+	case queue <- qa:
+		// Question sent successfully
+		LogInfo("AgentQA", fmt.Sprintf("Question %s sent to specialist '%s'", qa.ID, specialist.Name))
+	default:
+		// Queue is full
+		r.mutex.Lock()
+		qa.Status = QAStatusFailed
+		qa.Error = "Specialist queue is full"
+		delete(r.waiters, qa.ID)
+		r.mutex.Unlock()
+		return qa, fmt.Errorf("specialist queue is full")
+	}
+
+	// Return immediately with the question ID
+	return qa, nil
+}
+
+// GetAnswer retrieves the answer for a previously asked question
+func (r *AgentQARegistry) GetAnswer(questionID string, timeout time.Duration) (*QuestionAnswer, error) {
+	r.mutex.RLock()
+	
+	// Get the Q&A entry
+	qa, exists := r.qaHistory[questionID]
+	if !exists {
+		r.mutex.RUnlock()
+		return nil, fmt.Errorf("question ID '%s' not found", questionID)
+	}
+
+	// Check if answer is already available
+	if qa.Status == QAStatusCompleted || qa.Status == QAStatusFailed {
+		r.mutex.RUnlock()
+		return qa, nil
+	}
+
+	// Get the waiter channel
+	waiter, exists := r.waiters[questionID]
+	if !exists {
+		// No waiter channel means the question was already answered or timed out
+		r.mutex.RUnlock()
+		return qa, nil
+	}
+	r.mutex.RUnlock()
+
+	// Wait for answer with timeout
+	if timeout == 0 {
+		// No timeout - wait indefinitely
+		updatedQA := <-waiter
+		return updatedQA, nil
+	} else {
+		// With timeout
+		select {
+		case updatedQA := <-waiter:
+			return updatedQA, nil
+		case <-time.After(timeout):
+			// Return the current state of the Q&A
+			r.mutex.RLock()
+			currentQA := r.qaHistory[questionID]
+			r.mutex.RUnlock()
+			return currentQA, fmt.Errorf("timeout waiting for answer")
+		}
+	}
+}
+
+// startCleanupRoutine starts a goroutine that periodically cleans up expired Q&A entries
+func (r *AgentQARegistry) startCleanupRoutine() {
+	go func() {
+		ticker := time.NewTicker(1 * time.Hour) // Run cleanup every hour
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				r.cleanupExpiredEntries()
+			}
+		}
+	}()
+}
+
+// cleanupExpiredEntries removes Q&A entries that have expired
+func (r *AgentQARegistry) cleanupExpiredEntries() {
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
+
+	now := time.Now()
+	expiredCount := 0
+
+	for id, qa := range r.qaHistory {
+		if now.After(qa.ExpiresAt) {
+			// Clean up waiter channel if exists
+			if waiter, exists := r.waiters[id]; exists {
+				close(waiter)
+				delete(r.waiters, id)
+			}
+			
+			// Remove from history
+			delete(r.qaHistory, id)
+			expiredCount++
+		}
+	}
+
+	if expiredCount > 0 {
+		LogInfo("AgentQA", fmt.Sprintf("Cleaned up %d expired Q&A entries", expiredCount))
+	}
+}
+
+// GetQAsBySpecialty returns all Q&A entries for a specific specialty, sorted by timestamp (newest first)
+func (r *AgentQARegistry) GetQAsBySpecialty(specialty string) []*QuestionAnswer {
+	r.mutex.RLock()
+	defer r.mutex.RUnlock()
+
+	// Get the specialist for this specialty
+	specialist := r.specialists[specialty]
+	if specialist == nil {
+		return []*QuestionAnswer{}
+	}
+
+	qas := make([]*QuestionAnswer, 0)
+	for _, qa := range r.qaHistory {
+		if qa.To == specialist.Name {
+			qas = append(qas, qa)
+		}
+	}
+
+	// Sort by timestamp (newest first)
+	sort.Slice(qas, func(i, j int) bool {
+		return qas[i].Timestamp.After(qas[j].Timestamp)
+	})
+
+	return qas
 }
 
 // Global registry instance

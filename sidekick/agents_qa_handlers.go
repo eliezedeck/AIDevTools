@@ -21,10 +21,15 @@ func handleRegisterSpecialist(ctx context.Context, request mcp.CallToolRequest) 
 		return mcp.NewToolResultError("Missing or invalid 'specialty' argument"), nil
 	}
 
+	rootDir, err := request.RequireString("root_dir")
+	if err != nil {
+		return mcp.NewToolResultError("Missing or invalid 'root_dir' argument"), nil
+	}
+
 	// Extract session ID from context (for SSE mode)
 	sessionID := ExtractSessionFromContext(ctx)
 
-	agent, err := agentQARegistry.RegisterSpecialist(name, specialty, sessionID)
+	agent, err := agentQARegistry.RegisterSpecialist(name, specialty, rootDir, sessionID)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
@@ -33,6 +38,7 @@ func handleRegisterSpecialist(ctx context.Context, request mcp.CallToolRequest) 
 		"id":        agent.ID,
 		"name":      agent.Name,
 		"specialty": agent.Specialty,
+		"root_dir":  agent.RootDir,
 		"status":    agent.Status,
 	}
 
@@ -128,6 +134,16 @@ func handleAskSpecialist(ctx context.Context, request mcp.CallToolRequest) (*mcp
 		return mcp.NewToolResultError("Missing or invalid 'question' argument"), nil
 	}
 
+	// Get wait parameter (default: true)
+	wait := true
+	if arguments, ok := request.Params.Arguments.(map[string]any); ok {
+		if w, exists := arguments["wait"]; exists {
+			if wBool, ok := w.(bool); ok {
+				wait = wBool
+			}
+		}
+	}
+
 	// Get timeout parameter
 	timeout := time.Duration(0) // Default: no timeout (wait indefinitely)
 	if arguments, ok := request.Params.Arguments.(map[string]any); ok {
@@ -148,26 +164,40 @@ func handleAskSpecialist(ctx context.Context, request mcp.CallToolRequest) (*mcp
 		from = "Anonymous"
 	}
 
-	qa, err := agentQARegistry.AskQuestion(from, specialty, question, timeout)
-	if err != nil {
+	var qa *QuestionAnswer
+	var err2 error
+
+	if !wait {
+		// Non-blocking mode: submit question and return immediately
+		qa, err2 = agentQARegistry.AskQuestionAsync(from, specialty, question)
+	} else {
+		// Blocking mode: wait for answer
+		qa, err2 = agentQARegistry.AskQuestion(from, specialty, question, timeout)
+	}
+
+	if err2 != nil {
 		// Still return the Q&A info even on error
 		if qa != nil {
 			result := map[string]any{
 				"question_id": qa.ID,
 				"status":      string(qa.Status),
-				"error":       err.Error(),
+				"error":       err2.Error(),
 			}
 			resultBytes, _ := json.Marshal(result)
 			return mcp.NewToolResultText(string(resultBytes)), nil
 		}
-		return mcp.NewToolResultError(err.Error()), nil
+		return mcp.NewToolResultError(err2.Error()), nil
 	}
 
 	result := map[string]any{
-		"question_id":     qa.ID,
-		"answer":          qa.Answer,
-		"status":          string(qa.Status),
-		"processing_time": qa.ProcessingTime.String(),
+		"question_id": qa.ID,
+		"status":      string(qa.Status),
+	}
+
+	// Only include answer if we waited for it and it's available
+	if wait && qa.Status == QAStatusCompleted {
+		result["answer"] = qa.Answer
+		result["processing_time"] = qa.ProcessingTime.String()
 	}
 
 	resultBytes, _ := json.Marshal(result)
@@ -184,8 +214,70 @@ func handleListSpecialists(ctx context.Context, request mcp.CallToolRequest) (*m
 			"id":        agent.ID,
 			"name":      agent.Name,
 			"specialty": agent.Specialty,
+			"root_dir":  agent.RootDir,
 			"status":    agent.Status,
 		})
+	}
+
+	resultBytes, _ := json.Marshal(result)
+	return mcp.NewToolResultText(string(resultBytes)), nil
+}
+
+// handleGetAnswer retrieves the answer for a previously asked question
+func handleGetAnswer(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	questionID, err := request.RequireString("question_id")
+	if err != nil {
+		return mcp.NewToolResultError("Missing or invalid 'question_id' argument"), nil
+	}
+
+	// Get timeout parameter
+	timeout := time.Duration(0) // Default: no timeout (wait indefinitely)
+	if arguments, ok := request.Params.Arguments.(map[string]any); ok {
+		if t, exists := arguments["timeout"]; exists {
+			if tFloat, ok := t.(float64); ok {
+				timeoutMs := int64(tFloat)
+				if timeoutMs > 0 {
+					timeout = time.Duration(timeoutMs) * time.Millisecond
+				}
+			}
+		}
+	}
+
+	qa, err := agentQARegistry.GetAnswer(questionID, timeout)
+	if err != nil {
+		// Still return the Q&A info even on error
+		if qa != nil {
+			result := map[string]any{
+				"question_id":     qa.ID,
+				"question":        qa.Question,
+				"status":          string(qa.Status),
+				"timestamp":       qa.Timestamp.Format(time.RFC3339),
+				"processing_time": qa.ProcessingTime.String(),
+				"error":           err.Error(),
+			}
+			if qa.Answer != "" {
+				result["answer"] = qa.Answer
+			}
+			resultBytes, _ := json.Marshal(result)
+			return mcp.NewToolResultText(string(resultBytes)), nil
+		}
+		return mcp.NewToolResultError(err.Error()), nil
+	}
+
+	result := map[string]any{
+		"question_id":     qa.ID,
+		"question":        qa.Question,
+		"status":          string(qa.Status),
+		"timestamp":       qa.Timestamp.Format(time.RFC3339),
+		"processing_time": qa.ProcessingTime.String(),
+	}
+
+	if qa.Answer != "" {
+		result["answer"] = qa.Answer
+	}
+
+	if qa.Error != "" {
+		result["error"] = qa.Error
 	}
 
 	resultBytes, _ := json.Marshal(result)

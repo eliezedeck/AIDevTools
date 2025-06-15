@@ -198,12 +198,21 @@ build_from_source() {
     
     if [[ "$USE_LOCAL_DIR" == "true" ]]; then
         # Use the current script's directory as the repository
-        build_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-        log_info "Using local directory: $build_dir"
+        local script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+        log_info "Using local directory: $script_dir"
         
-        # Verify we're in the right place
-        if [[ ! -d "$build_dir/sidekick" ]] || [[ ! -f "$build_dir/sidekick/main.go" ]]; then
-            log_error "Not in AIDevTools repository root. Expected to find sidekick/main.go"
+        # Check if we're in the sidekick directory or the repository root
+        if [[ -f "$script_dir/main.go" ]] && [[ -f "$script_dir/go.mod" ]]; then
+            # We're already in the sidekick directory
+            build_dir="$(dirname "$script_dir")"
+            log_info "Detected sidekick directory, using parent as repository root"
+        elif [[ -d "$script_dir/sidekick" ]] && [[ -f "$script_dir/sidekick/main.go" ]]; then
+            # We're in the repository root
+            build_dir="$script_dir"
+            log_info "Detected repository root"
+        else
+            log_error "Not in AIDevTools repository. Expected to find sidekick/main.go"
+            log_error "Current directory: $script_dir"
             exit 1
         fi
     else

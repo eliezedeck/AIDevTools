@@ -10,29 +10,33 @@ import (
 
 // AgentsQAPageView represents the agents Q&A tracking page - IDIOMATIC IMPLEMENTATION
 type AgentsQAPageView struct {
-	tuiApp          *TUIApp
-	view            *tview.Flex
-	qaTable         *tview.Table
-	detailView      *tview.TextView
-	statusBar       *tview.TextView
-	selectedRow     int
-	focusedItem     int // 0: table, 1: detail view
-	lastQACount     int // Cache for incremental updates
-	currentDetailID string
+	tuiApp             *TUIApp
+	view               *tview.Flex
+	specialistsList    *tview.List
+	qaTable            *tview.Table
+	detailView         *tview.TextView
+	statusBar          *tview.TextView
+	selectedRow        int
+	focusedItem        int // 0: specialists list, 1: table, 2: detail view
+	lastQACount        int // Cache for incremental updates
+	currentDetailID    string
+	selectedSpecialty  string
 }
 
 // NewAgentsQAPageView creates a new agents Q&A page view
 func NewAgentsQAPageView(tuiApp *TUIApp) *AgentsQAPageView {
 	p := &AgentsQAPageView{
-		tuiApp:      tuiApp,
-		qaTable:     tview.NewTable(),
-		detailView:  tview.NewTextView(),
-		statusBar:   tview.NewTextView(),
-		selectedRow: 0,
-		focusedItem: 0,
-		lastQACount: 0,
+		tuiApp:          tuiApp,
+		specialistsList: tview.NewList(),
+		qaTable:         tview.NewTable(),
+		detailView:      tview.NewTextView(),
+		statusBar:       tview.NewTextView(),
+		selectedRow:     0,
+		focusedItem:     0,
+		lastQACount:     0,
 	}
 
+	p.setupSpecialistsList()
 	p.setupTable()
 	p.setupDetailView()
 	p.setupStatusBar()
@@ -44,23 +48,23 @@ func NewAgentsQAPageView(tuiApp *TUIApp) *AgentsQAPageView {
 
 // setupTable configures the Q&A table
 func (p *AgentsQAPageView) setupTable() {
-	p.qaTable.SetBorder(true).SetTitle(" Agent Q&A History ").SetTitleAlign(tview.AlignLeft)
+	p.qaTable.SetBorder(true).SetTitle(" Q&A History ").SetTitleAlign(tview.AlignLeft)
 	p.qaTable.SetSelectable(true, false)
 	p.qaTable.SetBorderPadding(0, 0, 1, 1)
 
 	// Set table headers
-	headers := []string{"Time", "From", "To", "Topic", "Status"}
+	headers := []string{"Time", "From", "Question", "Status"}
 	for col, header := range headers {
 		textAlign := tview.AlignCenter
-		if col == 3 { // Topic column
+		if col == 2 { // Question column
 			textAlign = tview.AlignLeft
 		}
 		cell := tview.NewTableCell(header).
 			SetTextColor(tcell.ColorYellow).
 			SetAlign(textAlign).
 			SetSelectable(false)
-		if col == 3 {
-			cell.SetExpansion(1) // Make topic column expand
+		if col == 2 {
+			cell.SetExpansion(1) // Make question column expand
 		}
 		p.qaTable.SetCell(0, col, cell)
 	}
@@ -90,12 +94,31 @@ func (p *AgentsQAPageView) setupStatusBar() {
 	p.statusBar.SetDynamicColors(true)
 }
 
+// setupSpecialistsList configures the specialists list
+func (p *AgentsQAPageView) setupSpecialistsList() {
+	p.specialistsList.SetBorder(true).SetTitle(" Registered Specialists ").SetTitleAlign(tview.AlignLeft)
+	p.specialistsList.ShowSecondaryText(true)
+	p.specialistsList.SetHighlightFullLine(true)
+	p.specialistsList.SetInputCapture(p.handleSpecialistsListKeys)
+	p.specialistsList.SetChangedFunc(p.handleSpecialistSelectionChanged)
+}
+
 // setupLayout creates the main layout
 func (p *AgentsQAPageView) setupLayout() {
+	// Left side - specialists list
+	leftPanel := p.specialistsList
+
+	// Middle - Q&A table
+	middlePanel := p.qaTable
+
+	// Right - detail view
+	rightPanel := p.detailView
+
 	// Main layout - horizontal split
 	mainContent := tview.NewFlex().SetDirection(tview.FlexColumn).
-		AddItem(p.qaTable, 0, 1, true).
-		AddItem(p.detailView, 0, 1, false)
+		AddItem(leftPanel, 40, 0, true).
+		AddItem(middlePanel, 0, 1, false).
+		AddItem(rightPanel, 50, 0, false)
 
 	// Vertical layout with status bar
 	p.view = tview.NewFlex().SetDirection(tview.FlexRow).
@@ -152,18 +175,26 @@ func (p *AgentsQAPageView) handleSelectionChanged(row, col int) {
 	}
 }
 
-// switchFocus switches focus between table and detail view
+// switchFocus switches focus between specialists list, table and detail view
 func (p *AgentsQAPageView) switchFocus() {
 	switch p.focusedItem {
-	case 0: // Table -> Detail view
+	case 0: // Specialists -> Table
 		p.focusedItem = 1
-		p.tuiApp.app.SetFocus(p.detailView)
-		p.qaTable.SetTitle(" Agent Q&A History ")
-		p.detailView.SetTitle(" Q&A Details [FOCUSED] ")
-	case 1: // Detail view -> Table
-		p.focusedItem = 0
 		p.tuiApp.app.SetFocus(p.qaTable)
-		p.qaTable.SetTitle(" Agent Q&A History [FOCUSED] ")
+		p.specialistsList.SetTitle(" Registered Specialists ")
+		p.qaTable.SetTitle(" Q&A History [FOCUSED] ")
+		p.detailView.SetTitle(" Q&A Details ")
+	case 1: // Table -> Detail view
+		p.focusedItem = 2
+		p.tuiApp.app.SetFocus(p.detailView)
+		p.specialistsList.SetTitle(" Registered Specialists ")
+		p.qaTable.SetTitle(" Q&A History ")
+		p.detailView.SetTitle(" Q&A Details [FOCUSED] ")
+	case 2: // Detail view -> Specialists
+		p.focusedItem = 0
+		p.tuiApp.app.SetFocus(p.specialistsList)
+		p.specialistsList.SetTitle(" Registered Specialists [FOCUSED] ")
+		p.qaTable.SetTitle(" Q&A History ")
 		p.detailView.SetTitle(" Q&A Details ")
 	}
 }
@@ -239,19 +270,66 @@ func (p *AgentsQAPageView) getStatusColor(status QAStatus) string {
 	}
 }
 
-// Refresh refreshes the Q&A list
+// handleSpecialistsListKeys handles key events for the specialists list
+func (p *AgentsQAPageView) handleSpecialistsListKeys(event *tcell.EventKey) *tcell.EventKey {
+	switch event.Key() {
+	case tcell.KeyTab:
+		p.switchFocus()
+		return nil
+	}
+	return event
+}
+
+// handleSpecialistSelectionChanged handles when specialist selection changes
+func (p *AgentsQAPageView) handleSpecialistSelectionChanged(index int, mainText string, secondaryText string, shortcut rune) {
+	// Extract specialty from the main text
+	if index >= 0 {
+		specialists := agentQARegistry.ListSpecialists()
+		if index < len(specialists) {
+			p.selectedSpecialty = specialists[index].Specialty
+			p.populateTable() // Refresh table with Q&As for this specialty
+		}
+	}
+}
+
+// Refresh refreshes the specialists list and Q&A table
 func (p *AgentsQAPageView) Refresh() {
+	p.populateSpecialistsList()
 	p.populateTable()
 }
 
 // Update updates the table with real-time data using IDIOMATIC INCREMENTAL UPDATES
 func (p *AgentsQAPageView) Update() {
+	p.populateSpecialistsList()
 	p.populateTableIncremental()
 	
 	// Update current detail view if something is selected
 	if p.currentDetailID != "" {
 		p.showSelectedDetails()
 	}
+}
+
+// populateSpecialistsList populates the specialists list
+func (p *AgentsQAPageView) populateSpecialistsList() {
+	p.specialistsList.Clear()
+
+	// Add "All Q&As" option
+	p.specialistsList.AddItem("All Q&As", "View all questions and answers", 0, nil)
+
+	// Get specialists
+	specialists := agentQARegistry.ListSpecialists()
+	for _, specialist := range specialists {
+		mainText := fmt.Sprintf("%s (%s)", specialist.Specialty, specialist.Name)
+		secondaryText := fmt.Sprintf("Root: %s | Status: %s", specialist.RootDir, specialist.Status)
+		p.specialistsList.AddItem(mainText, secondaryText, 0, nil)
+	}
+
+	// Update title with count
+	title := fmt.Sprintf(" Registered Specialists (%d) ", len(specialists))
+	if p.focusedItem == 0 {
+		title += "[FOCUSED]"
+	}
+	p.specialistsList.SetTitle(title)
 }
 
 // populateTable populates the table with Q&A history (FULL REBUILD)
@@ -261,11 +339,15 @@ func (p *AgentsQAPageView) populateTable() {
 		p.qaTable.RemoveRow(row)
 	}
 
-	// Get Q&A history
-	qaList := agentQARegistry.GetAllQAs()
-
-	// Sort by timestamp (newest first)
-	// The registry should return them sorted already
+	// Get Q&A history based on selected specialty
+	var qaList []*QuestionAnswer
+	if p.selectedSpecialty == "" || p.specialistsList.GetCurrentItem() == 0 {
+		// Show all Q&As
+		qaList = agentQARegistry.GetAllQAs()
+	} else {
+		// Show Q&As for specific specialty
+		qaList = agentQARegistry.GetQAsBySpecialty(p.selectedSpecialty)
+	}
 
 	// Populate table with Q&A entries
 	for i, qa := range qaList {
@@ -274,10 +356,10 @@ func (p *AgentsQAPageView) populateTable() {
 		// Format timestamp
 		timeStr := qa.Timestamp.Format("15:04:05")
 
-		// Truncate topic if too long
-		topic := qa.Question
-		if len(topic) > 40 {
-			topic = topic[:37] + "..."
+		// Truncate question if too long
+		question := qa.Question
+		if len(question) > 50 {
+			question = question[:47] + "..."
 		}
 
 		// Time cell with ID reference
@@ -291,13 +373,8 @@ func (p *AgentsQAPageView) populateTable() {
 			SetTextColor(tcell.ColorWhite).
 			SetAlign(tview.AlignCenter)
 		
-		// To cell  
-		toCell := tview.NewTableCell(qa.To).
-			SetTextColor(tcell.ColorWhite).
-			SetAlign(tview.AlignCenter)
-		
-		// Topic cell
-		topicCell := tview.NewTableCell(topic).
+		// Question cell
+		questionCell := tview.NewTableCell(question).
 			SetTextColor(tcell.ColorWhite).
 			SetExpansion(1)
 		
@@ -321,14 +398,16 @@ func (p *AgentsQAPageView) populateTable() {
 		// Add cells
 		p.qaTable.SetCell(row, 0, timeCell)
 		p.qaTable.SetCell(row, 1, fromCell)
-		p.qaTable.SetCell(row, 2, toCell)
-		p.qaTable.SetCell(row, 3, topicCell)
-		p.qaTable.SetCell(row, 4, statusCell)
+		p.qaTable.SetCell(row, 2, questionCell)
+		p.qaTable.SetCell(row, 3, statusCell)
 	}
 
-	// Update title with count
-	title := fmt.Sprintf(" Agent Q&A History (%d) ", len(qaList))
-	if p.focusedItem == 0 {
+	// Update title with count and selected specialty
+	title := fmt.Sprintf(" Q&A History (%d) ", len(qaList))
+	if p.selectedSpecialty != "" && p.specialistsList.GetCurrentItem() > 0 {
+		title = fmt.Sprintf(" Q&A History for %s (%d) ", p.selectedSpecialty, len(qaList))
+	}
+	if p.focusedItem == 1 {
 		title += "[FOCUSED]"
 	}
 	p.qaTable.SetTitle(title)
@@ -345,8 +424,15 @@ func (p *AgentsQAPageView) populateTable() {
 
 // populateTableIncremental uses IDIOMATIC INCREMENTAL UPDATE pattern
 func (p *AgentsQAPageView) populateTableIncremental() {
-	// Get current Q&A list
-	qaList := agentQARegistry.GetAllQAs()
+	// Get Q&A history based on selected specialty
+	var qaList []*QuestionAnswer
+	if p.selectedSpecialty == "" || p.specialistsList.GetCurrentItem() == 0 {
+		// Show all Q&As
+		qaList = agentQARegistry.GetAllQAs()
+	} else {
+		// Show Q&As for specific specialty
+		qaList = agentQARegistry.GetQAsBySpecialty(p.selectedSpecialty)
+	}
 
 	// Check if we need to do a full rebuild
 	currentCount := len(qaList)
@@ -377,7 +463,7 @@ func (p *AgentsQAPageView) populateTableIncremental() {
 			statusColor = tcell.ColorRed
 		}
 
-		statusCell := p.qaTable.GetCell(row, 4)
+		statusCell := p.qaTable.GetCell(row, 3)
 		if statusCell != nil {
 			statusCell.SetText(string(qa.Status)).SetTextColor(statusColor)
 		}
