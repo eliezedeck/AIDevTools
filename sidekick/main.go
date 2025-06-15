@@ -49,12 +49,6 @@ func isTUIActiveCheck() bool {
 	return isTUIActive
 }
 
-// logIfNotTUI logs only when SSE server is running but TUI is not active
-func logIfNotTUI(format string, args ...interface{}) {
-	if globalSSEServer != nil && !isTUIActiveCheck() {
-		log.Printf(format, args...)
-	}
-}
 
 func main() {
 	// Handle command-line flags
@@ -383,26 +377,24 @@ func handleTUIShutdown(tuiApp *TUIApp) {
 	defer ticker.Stop()
 
 	for time.Now().Before(deadline) {
-		select {
-		case <-ticker.C:
-			// Count remaining processes
-			remainingCount := 0
-			for _, tracker := range runningProcesses {
-				tracker.Mutex.RLock()
-				if tracker.Status == StatusRunning || tracker.Status == StatusPending {
-					remainingCount++
-				}
-				tracker.Mutex.RUnlock()
+		<-ticker.C
+		// Count remaining processes
+		remainingCount := 0
+		for _, tracker := range runningProcesses {
+			tracker.Mutex.RLock()
+			if tracker.Status == StatusRunning || tracker.Status == StatusPending {
+				remainingCount++
 			}
+			tracker.Mutex.RUnlock()
+		}
 
-			// Update modal
-			modal.UpdateProgress(remainingCount, totalProcesses)
+		// Update modal
+		modal.UpdateProgress(remainingCount, totalProcesses)
 
-			if remainingCount == 0 {
-				// All processes terminated
-				time.Sleep(200 * time.Millisecond) // Brief pause to show success
-				return
-			}
+		if remainingCount == 0 {
+			// All processes terminated
+			time.Sleep(200 * time.Millisecond) // Brief pause to show success
+			return
 		}
 	}
 
