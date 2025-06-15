@@ -23,8 +23,8 @@ const (
 // QuestionAnswer represents a Q&A exchange between agents
 type QuestionAnswer struct {
 	ID             string
-	From           string    // Requesting agent
-	To             string    // Specialist agent
+	From           string // Requesting agent
+	To             string // Specialist agent
 	Question       string
 	Answer         string
 	Error          string
@@ -45,8 +45,8 @@ type SpecialistAgent struct {
 
 // AgentQARegistry manages Q&A exchanges and specialist registrations
 type AgentQARegistry struct {
-	specialists map[string]*SpecialistAgent // key: specialty
-	qaHistory   map[string]*QuestionAnswer  // key: Q&A ID
+	specialists map[string]*SpecialistAgent     // key: specialty
+	qaHistory   map[string]*QuestionAnswer      // key: Q&A ID
 	qaQueues    map[string]chan *QuestionAnswer // key: specialty
 	waiters     map[string]chan *QuestionAnswer // key: Q&A ID, for answer responses
 	mutex       sync.RWMutex
@@ -97,7 +97,7 @@ func (r *AgentQARegistry) UnregisterSpecialist(specialty string) {
 
 	if agent, exists := r.specialists[specialty]; exists {
 		delete(r.specialists, specialty)
-		
+
 		// Close the question queue
 		if queue, exists := r.qaQueues[specialty]; exists {
 			close(queue)
@@ -137,7 +137,7 @@ func (r *AgentQARegistry) ListSpecialists() []*SpecialistAgent {
 // AskQuestion submits a question to a specialist
 func (r *AgentQARegistry) AskQuestion(from, specialty, question string, timeout time.Duration) (*QuestionAnswer, error) {
 	r.mutex.Lock()
-	
+
 	// Check if specialist exists
 	specialist := r.specialists[specialty]
 	if specialist == nil {
@@ -188,26 +188,29 @@ func (r *AgentQARegistry) AskQuestion(from, specialty, question string, timeout 
 
 	// Wait for response with timeout
 	if timeout == 0 {
-		timeout = 30 * time.Second // Default timeout
-	}
-
-	select {
-	case updatedQA := <-responseChan:
+		// No timeout - wait indefinitely
+		updatedQA := <-responseChan
 		return updatedQA, nil
-	case <-time.After(timeout):
-		r.mutex.Lock()
-		qa.Status = QAStatusTimeout
-		qa.Error = "Timeout waiting for response"
-		delete(r.waiters, qa.ID)
-		r.mutex.Unlock()
-		return qa, fmt.Errorf("timeout waiting for response")
+	} else {
+		// With timeout
+		select {
+		case updatedQA := <-responseChan:
+			return updatedQA, nil
+		case <-time.After(timeout):
+			r.mutex.Lock()
+			qa.Status = QAStatusTimeout
+			qa.Error = "Timeout waiting for response"
+			delete(r.waiters, qa.ID)
+			r.mutex.Unlock()
+			return qa, fmt.Errorf("timeout waiting for response")
+		}
 	}
 }
 
 // WaitForQuestion waits for a question for a specialist (blocking)
 func (r *AgentQARegistry) WaitForQuestion(specialty string, timeout time.Duration) (*QuestionAnswer, error) {
 	r.mutex.RLock()
-	
+
 	// Check if specialist exists
 	specialist := r.specialists[specialty]
 	if specialist == nil {
@@ -229,14 +232,12 @@ func (r *AgentQARegistry) WaitForQuestion(specialty string, timeout time.Duratio
 	// Wait for question
 	if timeout == 0 {
 		// No timeout - block indefinitely
-		select {
-		case qa := <-queue:
-			r.mutex.Lock()
-			qa.Status = QAStatusProcessing
-			specialist.Status = "busy"
-			r.mutex.Unlock()
-			return qa, nil
-		}
+		qa := <-queue
+		r.mutex.Lock()
+		qa.Status = QAStatusProcessing
+		specialist.Status = "busy"
+		r.mutex.Unlock()
+		return qa, nil
 	} else {
 		// With timeout
 		select {
@@ -265,7 +266,7 @@ func (r *AgentQARegistry) AnswerQuestion(questionID, answer string, err error) e
 
 	// Update Q&A entry
 	qa.ProcessingTime = time.Since(qa.Timestamp)
-	
+
 	if err != nil {
 		qa.Status = QAStatusFailed
 		qa.Error = err.Error()
@@ -331,7 +332,7 @@ func (r *AgentQARegistry) CleanupForSession(sessionID string) {
 	for specialty, agent := range r.specialists {
 		if agent.SessionID == sessionID {
 			delete(r.specialists, specialty)
-			
+
 			// Close the question queue
 			if queue, exists := r.qaQueues[specialty]; exists {
 				close(queue)

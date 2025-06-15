@@ -49,7 +49,6 @@ func isTUIActiveCheck() bool {
 	return isTUIActive
 }
 
-
 func main() {
 	// Handle command-line flags
 	versionFlag := flag.Bool("version", false, "Print version and exit")
@@ -274,7 +273,7 @@ func main() {
 			mcp.Description("Question to ask"),
 		),
 		mcp.WithNumber("timeout",
-			mcp.Description("Timeout in milliseconds (optional, default 30000)"),
+			mcp.Description("Timeout in milliseconds (optional, default 0 = no timeout)"),
 		),
 	)
 

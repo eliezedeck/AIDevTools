@@ -44,7 +44,7 @@ func handleRegisterSpecialist(ctx context.Context, request mcp.CallToolRequest) 
 func handleAnswerQuestion(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	// Extract session ID to find specialist
 	sessionID := ExtractSessionFromContext(ctx)
-	
+
 	// Find which specialty this session is registered for
 	var specialty string
 	for _, agent := range agentQARegistry.ListSpecialists() {
@@ -61,7 +61,7 @@ func handleAnswerQuestion(ctx context.Context, request mcp.CallToolRequest) (*mc
 	// Get optional parameters
 	var questionID, answer string
 	var hasQuestionID, hasAnswer bool
-	
+
 	if arguments, ok := request.Params.Arguments.(map[string]any); ok {
 		if qid, exists := arguments["question_id"]; exists {
 			if qidStr, ok := qid.(string); ok && qidStr != "" {
@@ -69,7 +69,7 @@ func handleAnswerQuestion(ctx context.Context, request mcp.CallToolRequest) (*mc
 				hasQuestionID = true
 			}
 		}
-		
+
 		if ans, exists := arguments["answer"]; exists {
 			if ansStr, ok := ans.(string); ok && ansStr != "" {
 				answer = ansStr
@@ -129,7 +129,7 @@ func handleAskSpecialist(ctx context.Context, request mcp.CallToolRequest) (*mcp
 	}
 
 	// Get timeout parameter
-	timeout := 30 * time.Second // Default timeout
+	timeout := time.Duration(0) // Default: no timeout (wait indefinitely)
 	if arguments, ok := request.Params.Arguments.(map[string]any); ok {
 		if t, exists := arguments["timeout"]; exists {
 			if tFloat, ok := t.(float64); ok {
@@ -191,4 +191,3 @@ func handleListSpecialists(ctx context.Context, request mcp.CallToolRequest) (*m
 	resultBytes, _ := json.Marshal(result)
 	return mcp.NewToolResultText(string(resultBytes)), nil
 }
-
