@@ -1,0 +1,144 @@
+name: Release StdioBridge
+
+on:
+  push:
+    tags:
+      - 'stdiobridge-v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g., stdiobridge-v0.1.0)'
+        required: true
+        type: string
+
+env:
+  GO_VERSION: "1.23"
+
+jobs:
+  release:
+    name: Create StdioBridge Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: ${{ env.GO_VERSION }}
+
+    - name: Get version
+      id: version
+      run: |
+        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          echo "version=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+        else
+          echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Cache Go modules
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cache/go-build
+          ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
+
+    - name: Run stdiobridge tests
+      working-directory: ./stdiobridge
+      run: go test -v ./...
+
+    - name: Build stdiobridge for multiple platforms
+      working-directory: ./stdiobridge
+      run: |
+        mkdir -p ../dist
+        
+        VERSION="${{ steps.version.outputs.version }}"
+        LDFLAGS="-s -w -X main.version=${VERSION}"
+        
+        # macOS
+        GOOS=darwin GOARCH=arm64 go build -ldflags="${LDFLAGS}" -o ../dist/stdiobridge-darwin-arm64 .
+        GOOS=darwin GOARCH=amd64 go build -ldflags="${LDFLAGS}" -o ../dist/stdiobridge-darwin-amd64 .
+        
+        # Linux
+        GOOS=linux GOARCH=arm64 go build -ldflags="${LDFLAGS}" -o ../dist/stdiobridge-linux-arm64 .
+        GOOS=linux GOARCH=amd64 go build -ldflags="${LDFLAGS}" -o ../dist/stdiobridge-linux-amd64 .
+        
+        # Windows
+        GOOS=windows GOARCH=amd64 go build -ldflags="${LDFLAGS}" -o ../dist/stdiobridge-windows-amd64.exe .
+
+    - name: Create archives
+      run: |
+        cd dist
+        
+        # StdioBridge archives
+        tar -czf stdiobridge-darwin-arm64.tar.gz stdiobridge-darwin-arm64
+        tar -czf stdiobridge-darwin-amd64.tar.gz stdiobridge-darwin-amd64
+        tar -czf stdiobridge-linux-arm64.tar.gz stdiobridge-linux-arm64
+        tar -czf stdiobridge-linux-amd64.tar.gz stdiobridge-linux-amd64
+        zip stdiobridge-windows-amd64.zip stdiobridge-windows-amd64.exe
+
+    - name: Generate checksums
+      run: |
+        cd dist
+        sha256sum *.tar.gz *.zip > checksums.txt
+
+    - name: Generate changelog
+      id: changelog
+      run: |
+        if git tag --list | grep -q "stdiobridge-v"; then
+          PREV_TAG=$(git tag -l "stdiobridge-v*" | sort -V | tail -n2 | head -n1)
+          if [ -n "$PREV_TAG" ]; then
+            echo "changelog<<EOF" >> $GITHUB_OUTPUT
+            git log --pretty=format:"- %s (%h)" $PREV_TAG..HEAD -- stdiobridge/ >> $GITHUB_OUTPUT
+            echo "" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          else
+            echo "changelog=Initial stdiobridge release" >> $GITHUB_OUTPUT
+          fi
+        else
+          echo "changelog=Initial stdiobridge release" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ steps.version.outputs.version }}
+        name: StdioBridge ${{ steps.version.outputs.version }}
+        body: |
+          ## StdioBridge Changes
+          ${{ steps.changelog.outputs.changelog }}
+          
+          ## Installation
+          
+          ### Quick Install
+          
+          ```bash
+          curl -sSL https://raw.githubusercontent.com/eliezedeck/AIDevTools/main/stdiobridge/install.sh | bash
+          ```
+          
+          ### Manual Download
+          
+          Download the appropriate binary for your platform from the assets below.
+          
+          ## Verification
+          
+          Verify the download with the provided checksums:
+          ```bash
+          sha256sum -c checksums.txt
+          ```
+        files: |
+          dist/*.tar.gz
+          dist/*.zip
+          dist/checksums.txt
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,8 +1,6 @@
 name: CI
 
 on:
-  push:
-    branches: [ main ]
   pull_request:
     branches: [ main ]
   workflow_dispatch:
@@ -37,16 +35,23 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-go-
 
-    - name: Download dependencies
+    - name: Download sidekick dependencies
       working-directory: ./sidekick
       run: go mod download
 
-    - name: Verify dependencies
+    - name: Verify sidekick dependencies
       working-directory: ./sidekick
       run: go mod verify
 
+    - name: Download stdiobridge dependencies
+      working-directory: ./stdiobridge
+      run: go mod download
 
-    - name: Run tests
+    - name: Verify stdiobridge dependencies
+      working-directory: ./stdiobridge
+      run: go mod verify
+
+    - name: Run sidekick tests
       working-directory: ./sidekick
       run: |
         if [ "$RUNNER_OS" == "Linux" ]; then
@@ -56,9 +61,17 @@ jobs:
         fi
       shell: bash
 
-    - name: Build binary
+    - name: Run stdiobridge tests
+      working-directory: ./stdiobridge
+      run: go test -v ./...
+
+    - name: Build sidekick
       working-directory: ./sidekick
       run: go build -v -o sidekick .
+
+    - name: Build stdiobridge
+      working-directory: ./stdiobridge
+      run: go build -v -o stdiobridge .
 
     - name: Upload coverage to Codecov
       if: matrix.os == 'ubuntu-latest'

@@ -1,13 +1,13 @@
-name: Release
+name: Release Sidekick
 
 on:
   push:
     tags:
-      - 'v*'
+      - 'sidekick-v*'
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to release (e.g., v0.1.0)'
+        description: 'Tag to release (e.g., sidekick-v0.1.0)'
         required: true
         type: string
 
@@ -16,7 +16,7 @@ env:
 
 jobs:
   release:
-    name: Create Release
+    name: Create Sidekick Release
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -51,39 +51,34 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-go-
 
-    - name: Run tests
+    - name: Run sidekick tests
       working-directory: ./sidekick
       run: go test -v ./...
 
-    - name: Build for multiple platforms
+    - name: Build sidekick for multiple platforms
       working-directory: ./sidekick
       run: |
         mkdir -p ../dist
         
-        # Build with version injection
         VERSION="${{ steps.version.outputs.version }}"
         LDFLAGS="-s -w -X main.version=${VERSION}"
         
-        # macOS ARM64
+        # macOS
         GOOS=darwin GOARCH=arm64 go build -ldflags="${LDFLAGS}" -o ../dist/sidekick-darwin-arm64 .
-        
-        # macOS AMD64
         GOOS=darwin GOARCH=amd64 go build -ldflags="${LDFLAGS}" -o ../dist/sidekick-darwin-amd64 .
         
-        # Linux ARM64
+        # Linux
         GOOS=linux GOARCH=arm64 go build -ldflags="${LDFLAGS}" -o ../dist/sidekick-linux-arm64 .
-        
-        # Linux AMD64
         GOOS=linux GOARCH=amd64 go build -ldflags="${LDFLAGS}" -o ../dist/sidekick-linux-amd64 .
         
-        # Windows AMD64
+        # Windows
         GOOS=windows GOARCH=amd64 go build -ldflags="${LDFLAGS}" -o ../dist/sidekick-windows-amd64.exe .
 
     - name: Create archives
       run: |
         cd dist
         
-        # Create compressed archives
+        # Sidekick archives
         tar -czf sidekick-darwin-arm64.tar.gz sidekick-darwin-arm64
         tar -czf sidekick-darwin-amd64.tar.gz sidekick-darwin-amd64
         tar -czf sidekick-linux-arm64.tar.gz sidekick-linux-arm64
@@ -98,51 +93,40 @@ jobs:
     - name: Generate changelog
       id: changelog
       run: |
-        if git tag --list | grep -q "v"; then
-          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^)
-          echo "changelog<<EOF" >> $GITHUB_OUTPUT
-          git log --pretty=format:"- %s (%h)" $PREV_TAG..HEAD >> $GITHUB_OUTPUT
-          echo "" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+        if git tag --list | grep -q "sidekick-v"; then
+          PREV_TAG=$(git tag -l "sidekick-v*" | sort -V | tail -n2 | head -n1)
+          if [ -n "$PREV_TAG" ]; then
+            echo "changelog<<EOF" >> $GITHUB_OUTPUT
+            git log --pretty=format:"- %s (%h)" $PREV_TAG..HEAD -- sidekick/ >> $GITHUB_OUTPUT
+            echo "" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          else
+            echo "changelog=Initial sidekick release" >> $GITHUB_OUTPUT
+          fi
         else
-          echo "changelog=Initial release" >> $GITHUB_OUTPUT
+          echo "changelog=Initial sidekick release" >> $GITHUB_OUTPUT
         fi
 
     - name: Create Release
       uses: softprops/action-gh-release@v1
       with:
         tag_name: ${{ steps.version.outputs.version }}
-        name: Release ${{ steps.version.outputs.version }}
+        name: Sidekick ${{ steps.version.outputs.version }}
         body: |
-          ## Changes
+          ## Sidekick Changes
           ${{ steps.changelog.outputs.changelog }}
           
           ## Installation
           
-          Download the appropriate binary for your platform:
+          ### Quick Install
           
-          ### macOS
           ```bash
-          # ARM64 (Apple Silicon)
-          curl -L https://github.com/eliezedeck/AIDevTools/releases/download/${{ steps.version.outputs.version }}/sidekick-darwin-arm64.tar.gz | tar -xz
-          
-          # AMD64 (Intel)
-          curl -L https://github.com/eliezedeck/AIDevTools/releases/download/${{ steps.version.outputs.version }}/sidekick-darwin-amd64.tar.gz | tar -xz
+          curl -sSL https://raw.githubusercontent.com/eliezedeck/AIDevTools/main/sidekick/install.sh | bash
           ```
           
-          ### Linux
-          ```bash
-          # ARM64
-          curl -L https://github.com/eliezedeck/AIDevTools/releases/download/${{ steps.version.outputs.version }}/sidekick-linux-arm64.tar.gz | tar -xz
+          ### Manual Download
           
-          # AMD64
-          curl -L https://github.com/eliezedeck/AIDevTools/releases/download/${{ steps.version.outputs.version }}/sidekick-linux-amd64.tar.gz | tar -xz
-          ```
-          
-          ### Windows
-          ```powershell
-          # Download and extract sidekick-windows-amd64.zip
-          ```
+          Download the appropriate binary for your platform from the assets below.
           
           ## Verification
           
