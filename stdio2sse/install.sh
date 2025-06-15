@@ -94,25 +94,27 @@ command_exists() {
     command -v "$1" >/dev/null 2>&1
 }
 
-# Get latest release version
+# Get latest stdio2sse release version
 get_latest_version() {
-    log_info "Fetching latest release information..."
+    log_info "Fetching latest stdio2sse release information..."
     
+    # Get all releases and filter for stdio2sse-v* tags
     if command_exists curl; then
-        VERSION=$(curl -s "$GITHUB_API/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+        VERSION=$(curl -s "$GITHUB_API/releases" | grep '"tag_name":' | grep 'stdio2sse-v' | head -n1 | sed -E 's/.*"([^"]+)".*/\1/')
     elif command_exists wget; then
-        VERSION=$(wget -qO- "$GITHUB_API/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+        VERSION=$(wget -qO- "$GITHUB_API/releases" | grep '"tag_name":' | grep 'stdio2sse-v' | head -n1 | sed -E 's/.*"([^"]+)".*/\1/')
     else
         log_error "Neither curl nor wget found. Please install one of them."
         exit 1
     fi
     
     if [[ -z "$VERSION" ]]; then
-        log_error "Failed to fetch latest version. Trying fallback to v0.1.0..."
-        VERSION="v0.1.0"
+        log_warning "No stdio2sse releases found on GitHub. Building from source instead..."
+        build_from_source
+        return
     fi
     
-    log_success "Latest version: $VERSION"
+    log_success "Latest stdio2sse version: $VERSION"
 }
 
 # Download and extract binary

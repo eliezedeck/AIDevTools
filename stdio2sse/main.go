@@ -34,7 +34,7 @@ func main() {
 	flag.Parse()
 
 	if *versionFlag {
-		fmt.Printf("stdiobridge %s\n", version)
+		fmt.Printf("stdio2sse %s\n", version)
 		os.Exit(0)
 	}
 
@@ -109,7 +109,7 @@ func (b *StdioBridge) Initialize(ctx context.Context, name string, version strin
 		Params: mcp.InitializeParams{
 			ProtocolVersion: "2024-11-05",
 			ClientInfo: mcp.Implementation{
-				Name:    "stdiobridge",
+				Name:    "stdio2sse",
 				Version: version,
 			},
 			Capabilities: mcp.ClientCapabilities{

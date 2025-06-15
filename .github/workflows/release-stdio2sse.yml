@@ -56,8 +56,8 @@ jobs:
       run: |
         # Build sidekick first
         go build -o sidekick .
-        # Start sidekick in background on port 5050
-        ./sidekick --port 5050 --mode sse &
+        # Start sidekick in background on port 5050 with SSE mode
+        ./sidekick --port 5050 --sse --tui=false &
         SIDEKICK_PID=$!
         echo "SIDEKICK_PID=$SIDEKICK_PID" >> $GITHUB_ENV
         # Wait for server to start
