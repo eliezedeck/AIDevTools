@@ -171,7 +171,7 @@ func (sm *SessionManager) GetAllSessions() map[string]*Session {
 	return sessions
 }
 
-// ExtractSessionFromContext extracts session ID from the context
+// ExtractSessionFromContext extracts session ID from the context and ensures session exists
 func ExtractSessionFromContext(ctx context.Context) string {
 	// Check if we're in SSE mode
 	if globalSSEServer == nil {
@@ -182,6 +182,12 @@ func ExtractSessionFromContext(ctx context.Context) string {
 	session := server.ClientSessionFromContext(ctx)
 	if session != nil {
 		sessionID := session.SessionID()
+
+		// Ensure the session exists in our SessionManager
+		// This is important because sessions are created by the MCP library
+		// but we need to track them in our SessionManager for proper lifecycle management
+		sessionManager.EnsureSessionExists(sessionID)
+
 		return sessionID
 	}
 
@@ -198,4 +204,30 @@ func (sm *SessionManager) IsSessionActive(sessionID string) bool {
 	}
 
 	return false
+}
+
+// EnsureSessionExists creates a session if it doesn't exist, or returns the existing one
+func (sm *SessionManager) EnsureSessionExists(sessionID string) *Session {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	// Check if session already exists
+	if session, exists := sm.sessions[sessionID]; exists {
+		return session
+	}
+
+	// Create a new session
+	ctx, cancel := context.WithCancel(context.Background())
+
+	session := &Session{
+		ID:        sessionID,
+		Status:    SessionConnected,
+		Processes: []string{},
+		Context:   ctx,
+		Cancel:    cancel,
+	}
+
+	sm.sessions[sessionID] = session
+	LogInfo("Session", "Session auto-created from context", fmt.Sprintf("SessionID: %s", sessionID))
+	return session
 }
