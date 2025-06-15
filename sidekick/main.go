@@ -276,17 +276,24 @@ func main() {
 			}()
 		}
 
-		// Handle shutdown in a separate goroutine
+		// Handle shutdown in a separate goroutine with forced exit timeout
 		go func() {
 			select {
 			case <-sigChan:
-				// Handle OS signal (Ctrl+C)
+				// Handle OS signal (Ctrl+C, SIGTERM, etc.)
 				shutdownOnce.Do(func() {
 					close(shutdownChan)
 				})
 				if tuiManager != nil {
 					tuiManager.Stop()
 				}
+
+				// Force exit after timeout to prevent hanging
+				go func() {
+					time.Sleep(5 * time.Second)
+					log.Printf("Force exit after shutdown timeout")
+					os.Exit(1)
+				}()
 			case <-shutdownChan:
 				// Shutdown already initiated (e.g., from TUI exit)
 				// Just return to let this goroutine exit

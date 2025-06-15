@@ -2,7 +2,11 @@ package main
 
 import (
 	"context"
+	"os"
+	"os/signal"
 	"sort"
+	"sync"
+	"syscall"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
@@ -31,12 +35,16 @@ type TUIApp struct {
 	ctx               context.Context
 	cancel            context.CancelFunc
 	lastUpdateTime    time.Time
+	signalChan        chan os.Signal
+	shutdownOnce      sync.Once
+	signalStopped     bool
+	signalMutex       sync.Mutex
 }
 
 // NewTUIApp creates a new TUI application using idiomatic patterns
 func NewTUIApp() *TUIApp {
 	ctx, cancel := context.WithCancel(context.Background())
-	
+
 	tuiApp := &TUIApp{
 		app:            tview.NewApplication(),
 		pages:          tview.NewPages(),
@@ -44,33 +52,55 @@ func NewTUIApp() *TUIApp {
 		ctx:            ctx,
 		cancel:         cancel,
 		lastUpdateTime: time.Now(),
+		signalChan:     make(chan os.Signal, 1),
 	}
-	
+
+	// Set up signal handling for external termination
+	signal.Notify(tuiApp.signalChan, os.Interrupt, syscall.SIGTERM)
+	go tuiApp.handleSignals()
+
 	// Enable mouse support
 	tuiApp.app.EnableMouse(true)
-	
+
 	// Create the main pages
 	tuiApp.processesPage = NewProcessesPageView(tuiApp)
 	tuiApp.processDetailPage = NewProcessDetailPageView(tuiApp)
 	tuiApp.notificationsPage = NewNotificationsPageView(tuiApp)
 	tuiApp.logsPage = NewLogsPageView(tuiApp)
-	
+
 	// Add pages to the page container
 	tuiApp.pages.AddPage("processes", tuiApp.processesPage.GetView(), true, true)
 	tuiApp.pages.AddPage("process_detail", tuiApp.processDetailPage.GetView(), true, false)
 	tuiApp.pages.AddPage("notifications", tuiApp.notificationsPage.GetView(), true, false)
 	tuiApp.pages.AddPage("logs", tuiApp.logsPage.GetView(), true, false)
-	
+
 	// Set up the main layout
 	tuiApp.app.SetRoot(tuiApp.pages, true)
-	
+
 	// Set up global key handlers
 	tuiApp.app.SetInputCapture(tuiApp.handleGlobalKeys)
-	
+
 	// Start background update routine with smarter updates
 	go tuiApp.updateRoutine()
-	
+
 	return tuiApp
+}
+
+// handleSignals handles external termination signals
+func (t *TUIApp) handleSignals() {
+	select {
+	case <-t.signalChan:
+		// External signal received (SIGINT, SIGTERM, etc.)
+		t.shutdownOnce.Do(func() {
+			// Mark TUI as inactive immediately
+			setTUIActive(false)
+			// Stop the TUI application
+			t.Stop()
+		})
+	case <-t.ctx.Done():
+		// Context cancelled, exit gracefully
+		return
+	}
 }
 
 // handleGlobalKeys handles global keyboard shortcuts
@@ -118,7 +148,7 @@ func (t *TUIApp) handleGlobalKeys(event *tcell.EventKey) *tcell.EventKey {
 		}
 		return nil
 	}
-	
+
 	return event
 }
 
@@ -153,7 +183,7 @@ func (t *TUIApp) switchToPrevPage() {
 // SwitchToPage switches to the specified page
 func (t *TUIApp) SwitchToPage(page PageType) {
 	t.currentPage = page
-	
+
 	switch page {
 	case ProcessesPage:
 		t.pages.SwitchToPage("processes")
@@ -168,7 +198,7 @@ func (t *TUIApp) SwitchToPage(page PageType) {
 		t.pages.SwitchToPage("logs")
 		t.logsPage.Refresh()
 	}
-	
+
 	t.app.SetFocus(t.pages)
 }
 
@@ -182,7 +212,7 @@ func (t *TUIApp) ShowProcessDetail(processID string) {
 func (t *TUIApp) updateRoutine() {
 	ticker := time.NewTicker(1 * time.Second) // Faster for better responsiveness
 	defer ticker.Stop()
-	
+
 	for {
 		select {
 		case <-ticker.C:
@@ -213,12 +243,12 @@ func (t *TUIApp) shouldUpdate() bool {
 	if time.Since(t.lastUpdateTime) < 500*time.Millisecond {
 		return false
 	}
-	
+
 	// Always update process detail page when viewing it (for real-time logs)
 	if t.currentPage == ProcessDetailPage {
 		return true
 	}
-	
+
 	// For other pages, check if data actually changed
 	return t.hasDataChanged()
 }
@@ -237,14 +267,28 @@ func (t *TUIApp) Run() error {
 
 // Stop stops the TUI application
 func (t *TUIApp) Stop() {
+	// Use mutex to prevent double-stopping
+	t.signalMutex.Lock()
+	defer t.signalMutex.Unlock()
+
+	if !t.signalStopped {
+		// Stop signal handling
+		signal.Stop(t.signalChan)
+		close(t.signalChan)
+		t.signalStopped = true
+	}
+
+	// Cancel context to stop background goroutines
 	t.cancel()
+
+	// Stop the TUI application
 	t.app.Stop()
 }
 
 // GetProcessesBySession returns processes grouped by session, sorted by creation time
 func GetProcessesBySession(reverse bool) map[string][]*ProcessTracker {
 	processes := registry.getAllProcesses()
-	
+
 	// Sort by creation time
 	sort.Slice(processes, func(i, j int) bool {
 		if reverse {
@@ -252,7 +296,7 @@ func GetProcessesBySession(reverse bool) map[string][]*ProcessTracker {
 		}
 		return processes[i].StartTime.Before(processes[j].StartTime)
 	})
-	
+
 	// Group by session
 	sessionGroups := make(map[string][]*ProcessTracker)
 	for _, process := range processes {
@@ -262,7 +306,7 @@ func GetProcessesBySession(reverse bool) map[string][]*ProcessTracker {
 		}
 		sessionGroups[sessionID] = append(sessionGroups[sessionID], process)
 	}
-	
+
 	return sessionGroups
 }
 

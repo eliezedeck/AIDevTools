@@ -16,7 +16,7 @@ type TUIManager struct {
 // NewTUIManager creates a new TUI manager
 func NewTUIManager() *TUIManager {
 	ctx, cancel := context.WithCancel(context.Background())
-	
+
 	return &TUIManager{
 		ctx:    ctx,
 		cancel: cancel,
@@ -26,20 +26,23 @@ func NewTUIManager() *TUIManager {
 // Start starts the TUI application
 func (tm *TUIManager) Start() error {
 	// TUI starting - no logging allowed in TUI mode
-	
+
 	// Create the TUI application
 	tm.app = NewTUIApp()
-	
+
 	// Start the TUI application (blocks until stopped)
 	return tm.app.Run()
 }
 
 // Stop stops the TUI application
 func (tm *TUIManager) Stop() {
+	// Cancel context first to signal shutdown
+	tm.cancel()
+
+	// Stop the TUI application if it exists
 	if tm.app != nil {
 		tm.app.Stop()
 	}
-	tm.cancel()
 }
 
 // IsTUIMode returns true if we should run in TUI mode
@@ -53,9 +56,9 @@ func StartTUIIfEnabled() *TUIManager {
 	if !IsTUIMode() {
 		return nil
 	}
-	
+
 	tuiManager := NewTUIManager()
-	
+
 	// Start TUI in a separate goroutine
 	go func() {
 		defer func() {
@@ -63,15 +66,15 @@ func StartTUIIfEnabled() *TUIManager {
 				// Panic recovered, but can't log in TUI mode
 			}
 		}()
-		
+
 		// Small delay to ensure SSE server is fully started
 		time.Sleep(100 * time.Millisecond)
-		
+
 		if err := tuiManager.Start(); err != nil {
 			// TUI error occurred, but can't log in TUI mode
 		}
 	}()
-	
+
 	return tuiManager
 }
 
@@ -121,18 +124,18 @@ func SendProcessInputForTUI(processID, input string) error {
 	if !exists {
 		return nil
 	}
-	
+
 	tracker.Mutex.Lock()
 	defer tracker.Mutex.Unlock()
-	
+
 	if tracker.Status != StatusRunning {
 		return nil
 	}
-	
+
 	if tracker.StdinWriter == nil {
 		return nil
 	}
-	
+
 	// Send input with newline
 	finalInput := input + "\n"
 	_, err := tracker.StdinWriter.Write([]byte(finalInput))
@@ -148,10 +151,10 @@ func GetProcessOutputForTUI(processID string) (stdout, stderr string, err error)
 	if !exists {
 		return "", "", nil
 	}
-	
+
 	tracker.Mutex.RLock()
 	defer tracker.Mutex.RUnlock()
-	
+
 	if tracker.CombineOutput {
 		stdout = tracker.StdoutBuffer.GetContent()
 		stderr = ""
@@ -161,6 +164,6 @@ func GetProcessOutputForTUI(processID string) (stdout, stderr string, err error)
 			stderr = tracker.StderrBuffer.GetContent()
 		}
 	}
-	
+
 	return stdout, stderr, nil
 }
