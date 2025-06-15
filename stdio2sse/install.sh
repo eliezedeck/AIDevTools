@@ -109,9 +109,8 @@ get_latest_version() {
     fi
     
     if [[ -z "$VERSION" ]]; then
-        log_warning "No stdio2sse releases found on GitHub. Building from source instead..."
-        build_from_source
-        return
+        log_warning "No stdio2sse releases found on GitHub. Will build from source instead..."
+        return 1
     fi
     
     log_success "Latest stdio2sse version: $VERSION"
@@ -354,11 +353,14 @@ main() {
         build_from_source
     else
         # Get latest version
-        get_latest_version
-        
-        # Try to download binary, fallback to building from source
-        if ! download_binary; then
-            log_warning "Failed to download pre-built binary"
+        if get_latest_version; then
+            # Try to download binary, fallback to building from source
+            if ! download_binary; then
+                log_warning "Failed to download pre-built binary"
+                build_from_source
+            fi
+        else
+            # No releases found, build from source
             build_from_source
         fi
     fi
