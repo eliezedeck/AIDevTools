@@ -86,7 +86,7 @@ if [ "$SKIP_CI" != "true" ]; then
     
     echo "⏳ CI status: $STATUS (${ELAPSED}s elapsed)..."
     sleep 15
-        ELAPSED=$((ELAPSED + 15))
+    ELAPSED=$((ELAPSED + 15))
     done
 
     if [ $ELAPSED -ge $MAX_WAIT ]; then
