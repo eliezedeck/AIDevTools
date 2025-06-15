@@ -1,13 +1,13 @@
-name: Release StdioBridge
+name: Release stdio2sse
 
 on:
   push:
     tags:
-      - 'stdiobridge-v*'
+      - 'stdio2sse-v*'
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to release (e.g., stdiobridge-v0.1.0)'
+        description: 'Tag to release (e.g., stdio2sse-v0.1.0)'
         required: true
         type: string
 
@@ -16,7 +16,7 @@ env:
 
 jobs:
   release:
-    name: Create StdioBridge Release
+    name: Create stdio2sse Release
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -51,12 +51,12 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-go-
 
-    - name: Run stdiobridge tests
-      working-directory: ./stdiobridge
+    - name: Run stdio2sse tests
+      working-directory: ./stdio2sse
       run: go test -v ./...
 
-    - name: Build stdiobridge for multiple platforms
-      working-directory: ./stdiobridge
+    - name: Build stdio2sse for multiple platforms
+      working-directory: ./stdio2sse
       run: |
         mkdir -p ../dist
         
@@ -64,26 +64,26 @@ jobs:
         LDFLAGS="-s -w -X main.version=${VERSION}"
         
         # macOS
-        GOOS=darwin GOARCH=arm64 go build -ldflags="${LDFLAGS}" -o ../dist/stdiobridge-darwin-arm64 .
-        GOOS=darwin GOARCH=amd64 go build -ldflags="${LDFLAGS}" -o ../dist/stdiobridge-darwin-amd64 .
+        GOOS=darwin GOARCH=arm64 go build -ldflags="${LDFLAGS}" -o ../dist/stdio2sse-darwin-arm64 .
+        GOOS=darwin GOARCH=amd64 go build -ldflags="${LDFLAGS}" -o ../dist/stdio2sse-darwin-amd64 .
         
         # Linux
-        GOOS=linux GOARCH=arm64 go build -ldflags="${LDFLAGS}" -o ../dist/stdiobridge-linux-arm64 .
-        GOOS=linux GOARCH=amd64 go build -ldflags="${LDFLAGS}" -o ../dist/stdiobridge-linux-amd64 .
+        GOOS=linux GOARCH=arm64 go build -ldflags="${LDFLAGS}" -o ../dist/stdio2sse-linux-arm64 .
+        GOOS=linux GOARCH=amd64 go build -ldflags="${LDFLAGS}" -o ../dist/stdio2sse-linux-amd64 .
         
         # Windows
-        GOOS=windows GOARCH=amd64 go build -ldflags="${LDFLAGS}" -o ../dist/stdiobridge-windows-amd64.exe .
+        GOOS=windows GOARCH=amd64 go build -ldflags="${LDFLAGS}" -o ../dist/stdio2sse-windows-amd64.exe .
 
     - name: Create archives
       run: |
         cd dist
         
-        # StdioBridge archives
-        tar -czf stdiobridge-darwin-arm64.tar.gz stdiobridge-darwin-arm64
-        tar -czf stdiobridge-darwin-amd64.tar.gz stdiobridge-darwin-amd64
-        tar -czf stdiobridge-linux-arm64.tar.gz stdiobridge-linux-arm64
-        tar -czf stdiobridge-linux-amd64.tar.gz stdiobridge-linux-amd64
-        zip stdiobridge-windows-amd64.zip stdiobridge-windows-amd64.exe
+        # stdio2sse archives
+        tar -czf stdio2sse-darwin-arm64.tar.gz stdio2sse-darwin-arm64
+        tar -czf stdio2sse-darwin-amd64.tar.gz stdio2sse-darwin-amd64
+        tar -czf stdio2sse-linux-arm64.tar.gz stdio2sse-linux-arm64
+        tar -czf stdio2sse-linux-amd64.tar.gz stdio2sse-linux-amd64
+        zip stdio2sse-windows-amd64.zip stdio2sse-windows-amd64.exe
 
     - name: Generate checksums
       run: |
@@ -93,27 +93,27 @@ jobs:
     - name: Generate changelog
       id: changelog
       run: |
-        if git tag --list | grep -q "stdiobridge-v"; then
-          PREV_TAG=$(git tag -l "stdiobridge-v*" | sort -V | tail -n2 | head -n1)
+        if git tag --list | grep -q "stdio2sse-v"; then
+          PREV_TAG=$(git tag -l "stdio2sse-v*" | sort -V | tail -n2 | head -n1)
           if [ -n "$PREV_TAG" ]; then
             echo "changelog<<EOF" >> $GITHUB_OUTPUT
-            git log --pretty=format:"- %s (%h)" $PREV_TAG..HEAD -- stdiobridge/ >> $GITHUB_OUTPUT
+            git log --pretty=format:"- %s (%h)" $PREV_TAG..HEAD -- stdio2sse/ >> $GITHUB_OUTPUT
             echo "" >> $GITHUB_OUTPUT
             echo "EOF" >> $GITHUB_OUTPUT
           else
-            echo "changelog=Initial stdiobridge release" >> $GITHUB_OUTPUT
+            echo "changelog=Initial stdio2sse release" >> $GITHUB_OUTPUT
           fi
         else
-          echo "changelog=Initial stdiobridge release" >> $GITHUB_OUTPUT
+          echo "changelog=Initial stdio2sse release" >> $GITHUB_OUTPUT
         fi
 
     - name: Create Release
       uses: softprops/action-gh-release@v1
       with:
         tag_name: ${{ steps.version.outputs.version }}
-        name: StdioBridge ${{ steps.version.outputs.version }}
+        name: stdio2sse ${{ steps.version.outputs.version }}
         body: |
-          ## StdioBridge Changes
+          ## stdio2sse Changes
           ${{ steps.changelog.outputs.changelog }}
           
           ## Installation
@@ -121,7 +121,7 @@ jobs:
           ### Quick Install
           
           ```bash
-          curl -sSL https://raw.githubusercontent.com/eliezedeck/AIDevTools/main/stdiobridge/install.sh | bash
+          curl -sSL https://raw.githubusercontent.com/eliezedeck/AIDevTools/main/stdio2sse/install.sh | bash
           ```
           
           ### Manual Download

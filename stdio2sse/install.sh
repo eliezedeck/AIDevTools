@@ -1,8 +1,8 @@
 #!/bin/bash
 
-# AIDevTools StdioBridge Installation Script
-# Downloads and installs the latest stdiobridge binary from GitHub releases
-# Usage: curl -sSL https://raw.githubusercontent.com/eliezedeck/AIDevTools/main/stdiobridge/install.sh | bash
+# AIDevTools stdio2sse Installation Script
+# Downloads and installs the latest stdio2sse binary from GitHub releases
+# Usage: curl -sSL https://raw.githubusercontent.com/eliezedeck/AIDevTools/main/stdio2sse/install.sh | bash
 # Options:
 #   --force-build-from-source    Build from source instead of downloading pre-built binary
 #   --use-local-dir             Use current directory as source (only with --force-build-from-source)
@@ -11,7 +11,7 @@ set -e
 
 # Configuration
 REPO="eliezedeck/AIDevTools"
-BINARY_NAME="stdiobridge"
+BINARY_NAME="stdio2sse"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
 GITHUB_API="https://api.github.com/repos/$REPO"
 GITHUB_RELEASES="https://github.com/$REPO/releases"
@@ -203,7 +203,7 @@ build_from_source() {
         
         # Verify we're in the right place
         if [[ ! -f "$build_dir/main.go" ]] || [[ ! -f "$build_dir/go.mod" ]]; then
-            log_error "Not in stdiobridge directory. Expected to find main.go and go.mod"
+            log_error "Not in stdio2sse directory. Expected to find main.go and go.mod"
             exit 1
         fi
         
@@ -217,7 +217,7 @@ build_from_source() {
         
         local temp_dir
         temp_dir=$(mktemp -d)
-        build_dir="$temp_dir/AIDevTools/stdiobridge"
+        build_dir="$temp_dir/AIDevTools/stdio2sse"
         
         log_info "Cloning repository..."
         if ! git clone "https://github.com/$REPO.git" "$temp_dir/AIDevTools"; then
@@ -273,7 +273,7 @@ check_path() {
 # Check for existing installation
 check_existing() {
     if [[ -f "$INSTALL_DIR/$BINARY_NAME" ]]; then
-        log_warning "StdioBridge is already installed at $INSTALL_DIR/$BINARY_NAME"
+        log_warning "stdio2sse is already installed at $INSTALL_DIR/$BINARY_NAME"
         
         # Check if we can read from terminal (not piped)
         if [[ -t 0 ]]; then
@@ -323,7 +323,7 @@ verify_installation() {
         
         check_path
         
-        log_success "Ready to bridge SSE servers to stdio clients! 🎉"
+        log_success "Ready to bridge stdio clients to SSE servers! 🎉"
     else
         log_error "Installation failed - binary not found or not executable"
         exit 1
@@ -332,7 +332,7 @@ verify_installation() {
 
 # Main installation function
 main() {
-    echo "🌉 AIDevTools StdioBridge Installer"
+    echo "🌉 AIDevTools stdio2sse Installer"
     echo "====================================="
     echo ""
     

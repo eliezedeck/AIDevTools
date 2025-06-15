@@ -43,12 +43,12 @@ jobs:
       working-directory: ./sidekick
       run: go mod verify
 
-    - name: Download stdiobridge dependencies
-      working-directory: ./stdiobridge
+    - name: Download stdio2sse dependencies
+      working-directory: ./stdio2sse
       run: go mod download
 
-    - name: Verify stdiobridge dependencies
-      working-directory: ./stdiobridge
+    - name: Verify stdio2sse dependencies
+      working-directory: ./stdio2sse
       run: go mod verify
 
     - name: Run sidekick tests
@@ -61,17 +61,17 @@ jobs:
         fi
       shell: bash
 
-    - name: Run stdiobridge tests
-      working-directory: ./stdiobridge
+    - name: Run stdio2sse tests
+      working-directory: ./stdio2sse
       run: go test -v ./...
 
     - name: Build sidekick
       working-directory: ./sidekick
       run: go build -v -o sidekick .
 
-    - name: Build stdiobridge
-      working-directory: ./stdiobridge
-      run: go build -v -o stdiobridge .
+    - name: Build stdio2sse
+      working-directory: ./stdio2sse
+      run: go build -v -o stdio2sse .
 
     - name: Upload coverage to Codecov
       if: matrix.os == 'ubuntu-latest'

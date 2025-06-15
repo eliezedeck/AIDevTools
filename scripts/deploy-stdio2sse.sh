@@ -1,16 +1,16 @@
 #!/bin/bash
 set -e
 
-# Deploy stdiobridge next version by pushing to main, waiting for CI, then creating a new version tag
-# Usage: deploy-stdiobridge.sh [version]
-# Example: deploy-stdiobridge.sh stdiobridge-v0.2.0
+# Deploy stdio2sse next version by pushing to main, waiting for CI, then creating a new version tag
+# Usage: deploy-stdio2sse.sh [version]
+# Example: deploy-stdio2sse.sh stdio2sse-v0.2.0
 
 # Check if version is provided as argument
 if [ $# -eq 1 ]; then
     NEW_TAG="$1"
     # Validate version format
-    if [[ ! "$NEW_TAG" =~ ^stdiobridge-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        echo "❌ Invalid version format. Use stdiobridge-v<major>.<minor>.<patch> (e.g., stdiobridge-v0.2.0)"
+    if [[ ! "$NEW_TAG" =~ ^stdio2sse-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        echo "❌ Invalid version format. Use stdio2sse-v<major>.<minor>.<patch> (e.g., stdio2sse-v0.2.0)"
         exit 1
     fi
     echo "📌 Manual version specified: $NEW_TAG"
@@ -58,22 +58,22 @@ fi
 # Step 3: Determine version tag
 if [ -z "$NEW_TAG" ]; then
     # No manual version provided, auto-increment
-    echo "🏷️ Finding latest stdiobridge version tag..."
-    LATEST_TAG=$(git tag -l "stdiobridge-v*" | sort -V | tail -n1)
+    echo "🏷️ Finding latest stdio2sse version tag..."
+    LATEST_TAG=$(git tag -l "stdio2sse-v*" | sort -V | tail -n1)
     if [ -z "$LATEST_TAG" ]; then
-        echo "❌ No stdiobridge version tags found"
+        echo "❌ No stdio2sse version tags found"
         exit 1
     fi
 
-    echo "📌 Latest stdiobridge tag: $LATEST_TAG"
+    echo "📌 Latest stdio2sse tag: $LATEST_TAG"
 
     # Extract version components and increment patch
-    VERSION=${LATEST_TAG#stdiobridge-v}
+    VERSION=${LATEST_TAG#stdio2sse-v}
     MAJOR=$(echo $VERSION | cut -d. -f1)
     MINOR=$(echo $VERSION | cut -d. -f2)
     PATCH=$(echo $VERSION | cut -d. -f3)
     NEW_PATCH=$((PATCH + 1))
-    NEW_TAG="stdiobridge-v${MAJOR}.${MINOR}.${NEW_PATCH}"
+    NEW_TAG="stdio2sse-v${MAJOR}.${MINOR}.${NEW_PATCH}"
 
     echo "📈 Auto-incrementing to version: $NEW_TAG"
 else
@@ -90,12 +90,12 @@ git tag $NEW_TAG -m "Release $NEW_TAG"
 git push origin $NEW_TAG
 
 # Step 5: Monitor release workflow with optimized polling
-echo "⏳ Waiting for stdiobridge release workflow to start..."
+echo "⏳ Waiting for stdio2sse release workflow to start..."
 sleep 10
 
 # Get the release workflow run
-RELEASE_RUN_ID=$(gh run list --workflow=release-stdiobridge.yml --limit 1 --json databaseId --jq '.[0].databaseId')
-echo "📦 Monitoring stdiobridge release run $RELEASE_RUN_ID..."
+RELEASE_RUN_ID=$(gh run list --workflow=release-stdio2sse.yml --limit 1 --json databaseId --jq '.[0].databaseId')
+echo "📦 Monitoring stdio2sse release run $RELEASE_RUN_ID..."
 
 # Poll release status every 10 seconds (optimized for ~1m05s runtime)
 MAX_RELEASE_WAIT=90  # seconds
@@ -106,22 +106,22 @@ while [ $ELAPSED -lt $MAX_RELEASE_WAIT ]; do
     
     if [ "$STATUS" = "completed" ]; then
         if [ "$CONCLUSION" = "success" ]; then
-            echo "✅ StdioBridge release completed successfully!"
+            echo "✅ stdio2sse release completed successfully!"
             echo "🎉 Version $NEW_TAG has been deployed!"
             echo "📦 View release: https://github.com/eliezedeck/AIDevTools/releases/tag/$NEW_TAG"
             exit 0
         else
-            echo "❌ StdioBridge release failed with conclusion: $CONCLUSION"
+            echo "❌ stdio2sse release failed with conclusion: $CONCLUSION"
             exit 1
         fi
     fi
     
-    echo "⏳ StdioBridge release status: $STATUS (${ELAPSED}s elapsed)..."
+    echo "⏳ stdio2sse release status: $STATUS (${ELAPSED}s elapsed)..."
     sleep 10
     ELAPSED=$((ELAPSED + 10))
 done
 
 if [ $ELAPSED -ge $MAX_RELEASE_WAIT ]; then
-    echo "⚠️ StdioBridge release is taking longer than expected. Check manually: gh run view $RELEASE_RUN_ID"
+    echo "⚠️ stdio2sse release is taking longer than expected. Check manually: gh run view $RELEASE_RUN_ID"
     exit 1
 fi

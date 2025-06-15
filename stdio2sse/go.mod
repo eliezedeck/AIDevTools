@@ -1,4 +1,4 @@
-module stdiobridge
+module stdio2sse
 
 go 1.23.4
 
