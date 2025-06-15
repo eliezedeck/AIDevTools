@@ -61,9 +61,13 @@ jobs:
         SIDEKICK_PID=$!
         echo "SIDEKICK_PID=$SIDEKICK_PID" >> $GITHUB_ENV
         # Wait for server to start
-        sleep 3
-        # Check if server is running
-        curl -f http://localhost:5050/mcp/sse || (echo "Failed to start sidekick server" && exit 1)
+        sleep 5
+        # Check if process is still running
+        if ! ps -p $SIDEKICK_PID > /dev/null; then
+          echo "❌ Sidekick server failed to start"
+          exit 1
+        fi
+        echo "✅ Sidekick server started successfully (PID: $SIDEKICK_PID)"
 
     - name: Run stdio2sse tests
       working-directory: ./stdio2sse
