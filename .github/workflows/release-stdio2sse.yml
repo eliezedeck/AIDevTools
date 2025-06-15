@@ -51,9 +51,30 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-go-
 
+    - name: Start sidekick server for tests
+      working-directory: ./sidekick
+      run: |
+        # Build sidekick first
+        go build -o sidekick .
+        # Start sidekick in background on port 5050
+        ./sidekick --port 5050 --mode sse &
+        SIDEKICK_PID=$!
+        echo "SIDEKICK_PID=$SIDEKICK_PID" >> $GITHUB_ENV
+        # Wait for server to start
+        sleep 3
+        # Check if server is running
+        curl -f http://localhost:5050/mcp/sse || (echo "Failed to start sidekick server" && exit 1)
+
     - name: Run stdio2sse tests
       working-directory: ./stdio2sse
       run: go test -v ./...
+
+    - name: Stop sidekick server
+      if: always()
+      run: |
+        if [ ! -z "$SIDEKICK_PID" ]; then
+          kill $SIDEKICK_PID || true
+        fi
 
     - name: Build stdio2sse for multiple platforms
       working-directory: ./stdio2sse

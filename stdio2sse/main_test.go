@@ -10,18 +10,18 @@ import (
 )
 
 func TestStdioBridge(t *testing.T) {
-	// Step 1: Build stdiobridge
-	t.Log("Building stdiobridge...")
-	buildCmd := exec.Command("go", "build", "-o", "stdiobridge", "main.go")
+	// Step 1: Build stdio2sse
+	t.Log("Building stdio2sse...")
+	buildCmd := exec.Command("go", "build", "-o", "stdio2sse", "main.go")
 	output, err := buildCmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("Failed to build stdiobridge: %v\nOutput: %s", err, output)
+		t.Fatalf("Failed to build stdio2sse: %v\nOutput: %s", err, output)
 	}
 	t.Log("✓ Build successful")
 	
-	// Step 2: Start stdiobridge with SSE URL (without verbose for cleaner stdio)
-	t.Log("Starting stdiobridge...")
-	cmd := exec.Command("./stdiobridge", "--sse-url", "http://localhost:5050/mcp/sse")
+	// Step 2: Start stdio2sse with SSE URL (without verbose for cleaner stdio)
+	t.Log("Starting stdio2sse...")
+	cmd := exec.Command("./stdio2sse", "--sse-url", "http://localhost:5050/mcp/sse")
 	
 	// Set up pipes for stdio communication
 	stdin, err := cmd.StdinPipe()
@@ -43,9 +43,9 @@ func TestStdioBridge(t *testing.T) {
 	// Start the process
 	err = cmd.Start()
 	if err != nil {
-		t.Fatalf("Failed to start stdiobridge: %v", err)
+		t.Fatalf("Failed to start stdio2sse: %v", err)
 	}
-	t.Log("✓ Started stdiobridge")
+	t.Log("✓ Started stdio2sse")
 	
 	// Give it a moment to connect to SSE server
 	time.Sleep(500 * time.Millisecond)
@@ -271,7 +271,7 @@ func TestStdioBridge(t *testing.T) {
 			t.Logf("Process stdout:\n%s", stdout)
 			
 			// Check if output contains directory listing
-			if strings.Contains(stdout, "sidekick") && strings.Contains(stdout, "stdiobridge") {
+			if strings.Contains(stdout, "sidekick") && strings.Contains(stdout, "stdio2sse") {
 				t.Log("✓ Successfully received directory listing with expected directories")
 			} else {
 				t.Fatalf("Output doesn't contain expected directories")
@@ -320,7 +320,7 @@ done:
 	if err := cmd.Process.Kill(); err != nil {
 		t.Logf("Warning: Failed to kill process: %v", err)
 	}
-	t.Log("✓ Killed stdiobridge")
+	t.Log("✓ Killed stdio2sse")
 	
 	// Check if connection succeeded
 	if strings.Contains(allOutput, "Connected to SSE server") {
