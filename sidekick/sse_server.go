@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"runtime"
 	"time"
 
 	"github.com/mark3labs/mcp-go/server"
@@ -14,11 +15,6 @@ type SSEServerConfig struct {
 	Host string
 	Port string
 }
-
-
-
-
-
 
 // StartSSEServer starts the MCP server in SSE mode
 func StartSSEServer(mcpServer *server.MCPServer, config SSEServerConfig) error {
@@ -64,10 +60,10 @@ func StartSSEServer(mcpServer *server.MCPServer, config SSEServerConfig) error {
 		if isTUIActiveCheck() && globalTUIManager != nil && globalTUIManager.app != nil {
 			// Graceful shutdown for TUI mode with modal UI
 			handleTUIShutdown(globalTUIManager.app)
-			
+
 			// Immediately close the HTTP server after graceful shutdown
 			httpServer.Close()
-			
+
 			// No additional shutdown attempts needed
 			return nil
 		} else {
@@ -76,7 +72,7 @@ func StartSSEServer(mcpServer *server.MCPServer, config SSEServerConfig) error {
 
 			// Immediately disable keep-alives and stop accepting new connections
 			httpServer.SetKeepAlivesEnabled(false)
-			
+
 			// Force close all active connections after a short grace period
 			go func() {
 				time.Sleep(1 * time.Second)
@@ -86,12 +82,12 @@ func StartSSEServer(mcpServer *server.MCPServer, config SSEServerConfig) error {
 			// Try graceful shutdown with very short timeout
 			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer shutdownCancel()
-			
+
 			// Shutdown SSE server first
 			if err := sseServer.Shutdown(shutdownCtx); err != nil {
 				LogError("SSEServer", "SSE server shutdown error", err.Error())
 			}
-			
+
 			// Then shutdown HTTP server (will likely be already closed by force close)
 			if err := httpServer.Shutdown(shutdownCtx); err != nil && err != http.ErrServerClosed {
 				LogError("SSEServer", "HTTP server shutdown error", err.Error())
@@ -116,9 +112,16 @@ func handleSessionClosed(sessionID string) {
 	killedCount := registry.killProcessesBySession(sessionID)
 
 	if killedCount > 0 {
-		LogInfo("SSEServer", "Processes killed for disconnected session", 
+		LogInfo("SSEServer", "Processes killed for disconnected session",
 			fmt.Sprintf("Count: %d, SessionID: %s", killedCount, sessionID))
 	} else {
 		LogInfo("SSEServer", "No processes to clean up", fmt.Sprintf("SessionID: %s", sessionID))
 	}
+
+	// Force garbage collection to clean up any hanging resources
+	// This helps prevent memory leaks from disconnected sessions
+	go func() {
+		time.Sleep(1 * time.Second)
+		runtime.GC()
+	}()
 }

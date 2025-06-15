@@ -79,6 +79,19 @@ func main() {
 
 	// Serve stdio
 	log.Printf("Starting stdio bridge connected to %s\n", *sseURL)
+
+	// Set up cleanup on exit
+	defer func() {
+		log.Println("Cleaning up stdio bridge...")
+		if bridge.sseClient != nil {
+			// Try to gracefully close the SSE client
+			if err := bridge.sseClient.Close(); err != nil {
+				log.Printf("Warning: Error closing SSE client: %v\n", err)
+			}
+		}
+		log.Println("Stdio bridge cleanup complete")
+	}()
+
 	if err := server.ServeStdio(bridge.stdioServer); err != nil {
 		fmt.Fprintf(os.Stderr, "Server error: %v\n", err)
 		os.Exit(1)
@@ -88,22 +101,22 @@ func main() {
 func (b *StdioBridge) Initialize(ctx context.Context, name string, version string) error {
 	// Create SSE client
 	log.Printf("Connecting to SSE server at %s...\n", b.sseURL)
-	
+
 	// Create a new SSE client
 	sseClient, err := client.NewSSEMCPClient(b.sseURL)
 	if err != nil {
 		return fmt.Errorf("failed to create SSE client: %w", err)
 	}
-	
+
 	// Start the client
 	if err := sseClient.Start(ctx); err != nil {
 		return fmt.Errorf("failed to start SSE client: %w", err)
 	}
-	
+
 	// Initialize the connection with a timeout
 	initCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	
+
 	// Create initialization request
 	initRequest := mcp.InitializeRequest{
 		Params: mcp.InitializeParams{
@@ -118,17 +131,17 @@ func (b *StdioBridge) Initialize(ctx context.Context, name string, version strin
 			},
 		},
 	}
-	
+
 	// Initialize the client
 	initResult, err := sseClient.Initialize(initCtx, initRequest)
 	if err != nil {
 		return fmt.Errorf("failed to initialize SSE client: %w", err)
 	}
-	
-	log.Printf("Connected to SSE server: %s version %s\n", 
-		initResult.ServerInfo.Name, 
+
+	log.Printf("Connected to SSE server: %s version %s\n",
+		initResult.ServerInfo.Name,
 		initResult.ServerInfo.Version)
-	
+
 	// Check if the server has tool capability
 	if initResult.Capabilities.Tools == nil {
 		log.Printf("Warning: SSE server does not advertise tool capability\n")
@@ -137,12 +150,12 @@ func (b *StdioBridge) Initialize(ctx context.Context, name string, version strin
 	// List available tools from the SSE server
 	toolsCtx, toolsCancel := context.WithTimeout(ctx, 5*time.Second)
 	defer toolsCancel()
-	
+
 	toolsResult, err := sseClient.ListTools(toolsCtx, mcp.ListToolsRequest{})
 	if err != nil {
 		return fmt.Errorf("failed to list tools from SSE server: %w", err)
 	}
-	
+
 	log.Printf("Found %d tools on SSE server\n", len(toolsResult.Tools))
 
 	// Create stdio server
@@ -156,21 +169,35 @@ func (b *StdioBridge) Initialize(ctx context.Context, name string, version strin
 	for _, tool := range toolsResult.Tools {
 		// Make a copy of the tool for the closure
 		toolCopy := tool
-		
+
 		// Create a proxy handler for this tool
 		handler := func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			// Update the request to use the correct tool name
 			request.Params.Name = toolCopy.Name
-			
-			// Forward the call to the SSE server
-			result, err := sseClient.CallTool(ctx, request)
+
+			// Check if context is already cancelled before making the call
+			select {
+			case <-ctx.Done():
+				return nil, fmt.Errorf("request cancelled: %w", ctx.Err())
+			default:
+			}
+
+			// Forward the call to the SSE server with timeout
+			callCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			defer cancel()
+
+			result, err := sseClient.CallTool(callCtx, request)
 			if err != nil {
+				// Check if it's a context cancellation error
+				if ctx.Err() != nil {
+					return nil, fmt.Errorf("request cancelled: %w", ctx.Err())
+				}
 				return nil, fmt.Errorf("SSE server error: %w", err)
 			}
-			
+
 			return result, nil
 		}
-		
+
 		// Register the tool with our stdio server
 		b.stdioServer.AddTool(toolCopy, handler)
 		log.Printf("Registered tool: %s\n", tool.Name)
@@ -178,6 +205,6 @@ func (b *StdioBridge) Initialize(ctx context.Context, name string, version strin
 
 	// Store the client for later use
 	b.sseClient = sseClient
-	
+
 	return nil
 }

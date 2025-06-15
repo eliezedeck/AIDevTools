@@ -51,6 +51,16 @@ func handleAnswerQuestion(ctx context.Context, request mcp.CallToolRequest) (*mc
 	// Extract session ID to find specialist
 	sessionID := ExtractSessionFromContext(ctx)
 
+	// Validate session is still active
+	if sessionID == "" {
+		return mcp.NewToolResultError("No active session found"), nil
+	}
+
+	// Check if session is still connected
+	if !sessionManager.IsSessionActive(sessionID) {
+		return mcp.NewToolResultError("Session is no longer active"), nil
+	}
+
 	// Find which specialty this session is registered for
 	var specialty string
 	for _, agent := range agentQARegistry.ListSpecialists() {
@@ -84,11 +94,31 @@ func handleAnswerQuestion(ctx context.Context, request mcp.CallToolRequest) (*mc
 		}
 	}
 
+	// Get wait_for_next parameter (default: true)
+	waitForNext := true
+	if arguments, ok := request.Params.Arguments.(map[string]any); ok {
+		if w, exists := arguments["wait_for_next"]; exists {
+			if wBool, ok := w.(bool); ok {
+				waitForNext = wBool
+			}
+		}
+	}
+
 	// If both question_id and answer are provided, submit the answer first
 	if hasQuestionID && hasAnswer {
 		err := agentQARegistry.AnswerQuestion(questionID, answer, nil)
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
+		}
+
+		// If we don't need to wait for the next question, return success immediately
+		if !waitForNext {
+			result := map[string]any{
+				"status":      "answer_submitted",
+				"question_id": questionID,
+			}
+			resultBytes, _ := json.Marshal(result)
+			return mcp.NewToolResultText(string(resultBytes)), nil
 		}
 	}
 
@@ -105,9 +135,33 @@ func handleAnswerQuestion(ctx context.Context, request mcp.CallToolRequest) (*mc
 		}
 	}
 
-	// Wait for next question
-	qa, err := agentQARegistry.WaitForQuestion(specialty, timeout)
+	// Create a context that respects both the request context and session context
+	waitCtx := ctx
+	if session, exists := sessionManager.GetSession(sessionID); exists && session != nil && session.Context != nil {
+		// Use a context that cancels when either the request context or session context is cancelled
+		var cancel context.CancelFunc
+		waitCtx, cancel = context.WithCancel(ctx)
+		defer cancel()
+
+		go func() {
+			select {
+			case <-session.Context.Done():
+				cancel()
+			case <-ctx.Done():
+				cancel()
+			case <-waitCtx.Done():
+				return
+			}
+		}()
+	}
+
+	// Wait for next question with context cancellation support
+	qa, err := agentQARegistry.WaitForQuestionWithContext(waitCtx, specialty, timeout)
 	if err != nil {
+		// Check if error is due to context cancellation
+		if ctx.Err() != nil {
+			return mcp.NewToolResultError("Request cancelled"), nil
+		}
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 

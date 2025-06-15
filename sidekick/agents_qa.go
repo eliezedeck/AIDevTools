@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"sync"
@@ -216,6 +217,11 @@ func (r *AgentQARegistry) AskQuestion(from, specialty, question string, timeout 
 
 // WaitForQuestion waits for a question for a specialist (blocking)
 func (r *AgentQARegistry) WaitForQuestion(specialty string, timeout time.Duration) (*QuestionAnswer, error) {
+	return r.WaitForQuestionWithContext(context.Background(), specialty, timeout)
+}
+
+// WaitForQuestionWithContext waits for a question for a specialist with context cancellation support
+func (r *AgentQARegistry) WaitForQuestionWithContext(ctx context.Context, specialty string, timeout time.Duration) (*QuestionAnswer, error) {
 	r.mutex.RLock()
 
 	// Check if specialist exists
@@ -236,17 +242,21 @@ func (r *AgentQARegistry) WaitForQuestion(specialty string, timeout time.Duratio
 	specialist.Status = "available"
 	r.mutex.RUnlock()
 
-	// Wait for question
+	// Wait for question with context cancellation support
 	if timeout == 0 {
-		// No timeout - block indefinitely
-		qa := <-queue
-		r.mutex.Lock()
-		qa.Status = QAStatusProcessing
-		specialist.Status = "busy"
-		r.mutex.Unlock()
-		return qa, nil
+		// No timeout - block until question arrives or context is cancelled
+		select {
+		case qa := <-queue:
+			r.mutex.Lock()
+			qa.Status = QAStatusProcessing
+			specialist.Status = "busy"
+			r.mutex.Unlock()
+			return qa, nil
+		case <-ctx.Done():
+			return nil, fmt.Errorf("context cancelled: %w", ctx.Err())
+		}
 	} else {
-		// With timeout
+		// With timeout and context cancellation
 		select {
 		case qa := <-queue:
 			r.mutex.Lock()
@@ -256,6 +266,8 @@ func (r *AgentQARegistry) WaitForQuestion(specialty string, timeout time.Duratio
 			return qa, nil
 		case <-time.After(timeout):
 			return nil, fmt.Errorf("timeout waiting for question")
+		case <-ctx.Done():
+			return nil, fmt.Errorf("context cancelled: %w", ctx.Err())
 		}
 	}
 }
@@ -349,6 +361,25 @@ func (r *AgentQARegistry) CleanupForSession(sessionID string) {
 			LogInfo("AgentQA", fmt.Sprintf("Cleaned up specialist '%s' for session %s", agent.Name, sessionID))
 		}
 	}
+
+	// Mark any pending questions from this session as failed and notify waiters
+	for questionID, qa := range r.qaHistory {
+		if qa.From == fmt.Sprintf("Session %s", sessionID) && qa.Status == QAStatusPending {
+			qa.Status = QAStatusFailed
+			qa.Error = "Session disconnected"
+
+			// Notify any waiters for this question
+			if waiter, exists := r.waiters[questionID]; exists {
+				select {
+				case waiter <- qa:
+					// Successfully notified waiter
+				default:
+					// Waiter channel is full or closed, ignore
+				}
+				delete(r.waiters, questionID)
+			}
+		}
+	}
 }
 
 // AskQuestionAsync submits a question to a specialist and returns immediately with question ID
@@ -411,7 +442,7 @@ func (r *AgentQARegistry) AskQuestionAsync(from, specialty, question string) (*Q
 // GetAnswer retrieves the answer for a previously asked question
 func (r *AgentQARegistry) GetAnswer(questionID string, timeout time.Duration) (*QuestionAnswer, error) {
 	r.mutex.RLock()
-	
+
 	// Get the Q&A entry
 	qa, exists := r.qaHistory[questionID]
 	if !exists {
@@ -437,8 +468,15 @@ func (r *AgentQARegistry) GetAnswer(questionID string, timeout time.Duration) (*
 	// Wait for answer with timeout
 	if timeout == 0 {
 		// No timeout - wait indefinitely
-		updatedQA := <-waiter
-		return updatedQA, nil
+		select {
+		case updatedQA := <-waiter:
+			return updatedQA, nil
+		case <-time.After(24 * time.Hour): // Fallback timeout to prevent infinite hangs
+			r.mutex.RLock()
+			currentQA := r.qaHistory[questionID]
+			r.mutex.RUnlock()
+			return currentQA, fmt.Errorf("fallback timeout reached (24h)")
+		}
 	} else {
 		// With timeout
 		select {
@@ -484,7 +522,7 @@ func (r *AgentQARegistry) cleanupExpiredEntries() {
 				close(waiter)
 				delete(r.waiters, id)
 			}
-			
+
 			// Remove from history
 			delete(r.qaHistory, id)
 			expiredCount++

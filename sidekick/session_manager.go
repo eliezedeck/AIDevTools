@@ -54,15 +54,15 @@ func GetSessionFromContext(ctx context.Context) string {
 func (sm *SessionManager) CreateSession(sessionID string) *Session {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
-	
+
 	// Check if session already exists
 	if _, exists := sm.sessions[sessionID]; exists {
 		return sm.sessions[sessionID]
 	}
-	
+
 	// Create a long-lived context for this session
 	ctx, cancel := context.WithCancel(context.Background())
-	
+
 	session := &Session{
 		ID:        sessionID,
 		Status:    SessionConnected,
@@ -70,7 +70,7 @@ func (sm *SessionManager) CreateSession(sessionID string) *Session {
 		Context:   ctx,
 		Cancel:    cancel,
 	}
-	
+
 	sm.sessions[sessionID] = session
 	LogInfo("Session", "New session created", fmt.Sprintf("SessionID: %s", sessionID))
 	return session
@@ -80,7 +80,7 @@ func (sm *SessionManager) CreateSession(sessionID string) *Session {
 func (sm *SessionManager) GetSession(sessionID string) (*Session, bool) {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
-	
+
 	session, exists := sm.sessions[sessionID]
 	return session, exists
 }
@@ -89,10 +89,10 @@ func (sm *SessionManager) GetSession(sessionID string) (*Session, bool) {
 func (sm *SessionManager) AddProcessToSession(sessionID, processID string) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
-	
+
 	if session, exists := sm.sessions[sessionID]; exists {
 		session.Processes = append(session.Processes, processID)
-		LogInfo("Session", "Process added to session", 
+		LogInfo("Session", "Process added to session",
 			fmt.Sprintf("ProcessID: %s, SessionID: %s, Total: %d", processID, sessionID, len(session.Processes)))
 	} else {
 		// Create session if it doesn't exist (first process for this session)
@@ -100,7 +100,7 @@ func (sm *SessionManager) AddProcessToSession(sessionID, processID string) {
 		session := sm.CreateSession(sessionID)
 		sm.mu.Lock()
 		session.Processes = append(session.Processes, processID)
-		LogInfo("Session", "New session created with first process", 
+		LogInfo("Session", "New session created with first process",
 			fmt.Sprintf("SessionID: %s, ProcessID: %s", sessionID, processID))
 	}
 }
@@ -109,7 +109,7 @@ func (sm *SessionManager) AddProcessToSession(sessionID, processID string) {
 func (sm *SessionManager) MarkSessionDisconnected(sessionID string) []string {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
-	
+
 	if session, exists := sm.sessions[sessionID]; exists {
 		session.Status = SessionDisconnected
 		processes := session.Processes
@@ -120,7 +120,7 @@ func (sm *SessionManager) MarkSessionDisconnected(sessionID string) []string {
 		LogInfo("Session", "Session marked as disconnected", fmt.Sprintf("SessionID: %s", sessionID))
 		return processes
 	}
-	
+
 	return []string{}
 }
 
@@ -128,7 +128,7 @@ func (sm *SessionManager) MarkSessionDisconnected(sessionID string) []string {
 func (sm *SessionManager) RemoveSession(sessionID string) []string {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
-	
+
 	if session, exists := sm.sessions[sessionID]; exists {
 		processes := session.Processes
 		// Cancel the session context
@@ -138,7 +138,7 @@ func (sm *SessionManager) RemoveSession(sessionID string) []string {
 		delete(sm.sessions, sessionID)
 		return processes
 	}
-	
+
 	return []string{}
 }
 
@@ -146,14 +146,14 @@ func (sm *SessionManager) RemoveSession(sessionID string) []string {
 func (sm *SessionManager) GetProcessesBySession(sessionID string) []string {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
-	
+
 	if session, exists := sm.sessions[sessionID]; exists {
 		// Return a copy to prevent external modification
 		processes := make([]string, len(session.Processes))
 		copy(processes, session.Processes)
 		return processes
 	}
-	
+
 	return []string{}
 }
 
@@ -161,13 +161,13 @@ func (sm *SessionManager) GetProcessesBySession(sessionID string) []string {
 func (sm *SessionManager) GetAllSessions() map[string]*Session {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
-	
+
 	// Create a copy to prevent external modification
 	sessions := make(map[string]*Session)
 	for id, session := range sm.sessions {
 		sessions[id] = session
 	}
-	
+
 	return sessions
 }
 
@@ -177,13 +177,25 @@ func ExtractSessionFromContext(ctx context.Context) string {
 	if globalSSEServer == nil {
 		return "" // stdio mode, no session
 	}
-	
+
 	// Extract session from context using mark3labs/mcp-go method
 	session := server.ClientSessionFromContext(ctx)
 	if session != nil {
 		sessionID := session.SessionID()
 		return sessionID
 	}
-	
+
 	return ""
+}
+
+// IsSessionActive checks if a session is still active and connected
+func (sm *SessionManager) IsSessionActive(sessionID string) bool {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+
+	if session, exists := sm.sessions[sessionID]; exists {
+		return session.Status == SessionConnected
+	}
+
+	return false
 }
