@@ -16,46 +16,7 @@ if [ $# -eq 1 ]; then
     echo "📌 Manual version specified: $NEW_TAG"
 fi
 
-# Step 1: Push to main branch
-echo "🚀 Pushing to main branch..."
-git push origin main
-
-# Step 2: Monitor CI workflow with optimized polling
-echo "⏳ Waiting for CI to start..."
-sleep 10
-
-# Get the latest workflow run
-RUN_ID=$(gh run list --limit 1 --json databaseId --jq '.[0].databaseId')
-echo "📊 Monitoring CI run $RUN_ID..."
-
-# Poll CI status every 15 seconds (optimized for ~2m20s runtime)
-MAX_WAIT=160  # seconds
-ELAPSED=0
-while [ $ELAPSED -lt $MAX_WAIT ]; do
-    STATUS=$(gh run view $RUN_ID --json status --jq '.status')
-    CONCLUSION=$(gh run view $RUN_ID --json conclusion --jq '.conclusion // "pending"')
-    
-    if [ "$STATUS" = "completed" ]; then
-        if [ "$CONCLUSION" = "success" ]; then
-            echo "✅ CI passed successfully!"
-            break
-        else
-            echo "❌ CI failed with conclusion: $CONCLUSION"
-            exit 1
-        fi
-    fi
-    
-    echo "⏳ CI status: $STATUS (${ELAPSED}s elapsed)..."
-    sleep 15
-    ELAPSED=$((ELAPSED + 15))
-done
-
-if [ $ELAPSED -ge $MAX_WAIT ]; then
-    echo "⚠️ CI is taking longer than expected. Check manually: gh run view $RUN_ID"
-    exit 1
-fi
-
-# Step 3: Determine version tag
+# Step 1: Determine version tag first (before pushing)
 if [ -z "$NEW_TAG" ]; then
     # No manual version provided, auto-increment
     echo "🏷️ Finding latest stdio2sse version tag..."
@@ -75,7 +36,7 @@ if [ -z "$NEW_TAG" ]; then
     NEW_PATCH=$((PATCH + 1))
     NEW_TAG="stdio2sse-v${MAJOR}.${MINOR}.${NEW_PATCH}"
 
-    echo "📈 Auto-incrementing to version: $NEW_TAG"
+    echo "📈 Will auto-increment to version: $NEW_TAG"
 else
     # Manual version provided, check if it already exists
     if git tag -l "$NEW_TAG" | grep -q "$NEW_TAG"; then
@@ -84,12 +45,62 @@ else
     fi
 fi
 
-# Step 4: Create and push new tag
+# Step 2: Check if there are any changes to push
+echo "🔍 Checking for changes to push..."
+git fetch origin main
+if [ -z "$(git log origin/main..HEAD)" ]; then
+    echo "⚠️ No new commits to push. Skipping to tag creation."
+    SKIP_CI=true
+else
+    # Step 3: Push to main branch
+    echo "🚀 Pushing to main branch..."
+    git push origin main
+    SKIP_CI=false
+fi
+
+# Step 4: Monitor CI workflow with optimized polling (if we pushed)
+if [ "$SKIP_CI" != "true" ]; then
+    echo "⏳ Waiting for CI to start..."
+    sleep 10
+
+    # Get the latest workflow run
+    RUN_ID=$(gh run list --limit 1 --json databaseId --jq '.[0].databaseId')
+    echo "📊 Monitoring CI run $RUN_ID..."
+
+    # Poll CI status every 15 seconds (optimized for ~2m20s runtime)
+    MAX_WAIT=160  # seconds
+    ELAPSED=0
+    while [ $ELAPSED -lt $MAX_WAIT ]; do
+    STATUS=$(gh run view $RUN_ID --json status --jq '.status')
+    CONCLUSION=$(gh run view $RUN_ID --json conclusion --jq '.conclusion // "pending"')
+    
+    if [ "$STATUS" = "completed" ]; then
+        if [ "$CONCLUSION" = "success" ]; then
+            echo "✅ CI passed successfully!"
+            break
+        else
+            echo "❌ CI failed with conclusion: $CONCLUSION"
+            exit 1
+        fi
+    fi
+    
+    echo "⏳ CI status: $STATUS (${ELAPSED}s elapsed)..."
+    sleep 15
+        ELAPSED=$((ELAPSED + 15))
+    done
+
+    if [ $ELAPSED -ge $MAX_WAIT ]; then
+        echo "⚠️ CI is taking longer than expected. Check manually: gh run view $RUN_ID"
+        exit 1
+    fi
+fi
+
+# Step 5: Create and push new tag
 echo "🏷️ Creating tag $NEW_TAG..."
 git tag $NEW_TAG -m "Release $NEW_TAG"
 git push origin $NEW_TAG
 
-# Step 5: Monitor release workflow with optimized polling
+# Step 6: Monitor release workflow with optimized polling
 echo "⏳ Waiting for stdio2sse release workflow to start..."
 sleep 10
 
