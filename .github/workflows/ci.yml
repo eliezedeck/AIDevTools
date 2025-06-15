@@ -2,7 +2,7 @@ name: CI
 
 on:
   pull_request:
-    branches: [ main ]
+    branches: [main]
   workflow_dispatch:
 
 env:
@@ -15,70 +15,89 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-    
+
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - name: Set up Go
-      uses: actions/setup-go@v5
-      with:
-        go-version: ${{ env.GO_VERSION }}
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
 
-    - name: Cache Go modules
-      uses: actions/cache@v4
-      with:
-        path: |
-          ~/.cache/go-build
-          ~/go/pkg/mod
-        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-        restore-keys: |
-          ${{ runner.os }}-go-
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
 
-    - name: Download sidekick dependencies
-      working-directory: ./sidekick
-      run: go mod download
+      - name: Download sidekick dependencies
+        working-directory: ./sidekick
+        run: go mod download
 
-    - name: Verify sidekick dependencies
-      working-directory: ./sidekick
-      run: go mod verify
+      - name: Verify sidekick dependencies
+        working-directory: ./sidekick
+        run: go mod verify
 
-    - name: Download stdio2sse dependencies
-      working-directory: ./stdio2sse
-      run: go mod download
+      - name: Download stdio2sse dependencies
+        working-directory: ./stdio2sse
+        run: go mod download
 
-    - name: Verify stdio2sse dependencies
-      working-directory: ./stdio2sse
-      run: go mod verify
+      - name: Verify stdio2sse dependencies
+        working-directory: ./stdio2sse
+        run: go mod verify
 
-    - name: Run sidekick tests
-      working-directory: ./sidekick
-      run: |
-        if [ "$RUNNER_OS" == "Linux" ]; then
-          go test -v -race -coverprofile=coverage.out ./...
-        else
-          go test -v ./...
-        fi
-      shell: bash
+      - name: Run sidekick tests
+        working-directory: ./sidekick
+        run: |
+          if [ "$RUNNER_OS" == "Linux" ]; then
+            go test -v -race -coverprofile=coverage.out ./...
+          else
+            go test -v ./...
+          fi
+        shell: bash
 
-    - name: Run stdio2sse tests
-      working-directory: ./stdio2sse
-      run: go test -v ./...
+      - name: Start sidekick server for stdio2sse tests
+        working-directory: ./sidekick
+        run: |
+          # Build sidekick first
+          go build -o sidekick .
+          # Start sidekick in background on port 5050 with SSE mode
+          ./sidekick --port 5050 --sse --tui=false &
+          SIDEKICK_PID=$!
+          echo "SIDEKICK_PID=$SIDEKICK_PID" >> $GITHUB_ENV
+          # Wait for server to start
+          sleep 5
+          # Check if process is still running
+          if ! ps -p $SIDEKICK_PID > /dev/null; then
+            echo "❌ Sidekick server failed to start"
+            exit 1
+          fi
+          echo "✅ Sidekick server started successfully (PID: $SIDEKICK_PID)"
 
-    - name: Build sidekick
-      working-directory: ./sidekick
-      run: go build -v -o sidekick .
+      - name: Run stdio2sse tests
+        working-directory: ./stdio2sse
+        run: go test -v ./...
 
-    - name: Build stdio2sse
-      working-directory: ./stdio2sse
-      run: go build -v -o stdio2sse .
+      - name: Stop sidekick server
+        if: always()
+        run: |
+          if [ ! -z "$SIDEKICK_PID" ]; then
+            kill $SIDEKICK_PID || true
+          fi
 
-    - name: Upload coverage to Codecov
-      if: matrix.os == 'ubuntu-latest'
-      uses: codecov/codecov-action@v4
-      with:
-        file: ./sidekick/coverage.out
-        flags: unittests
-        name: codecov-umbrella
+      - name: Build stdio2sse
+        working-directory: ./stdio2sse
+        run: go build -v -o stdio2sse .
 
-
+      - name: Upload coverage to Codecov
+        if: matrix.os == 'ubuntu-latest'
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./sidekick/coverage.out
+          flags: unittests
+          name: codecov-umbrella
