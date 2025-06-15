@@ -19,7 +19,7 @@ type ProcessDetailPageView struct {
 	statusBar      *tview.TextView
 	processID      string
 	autoScroll     bool
-	focusedItem    int // 0: log view, 1: input field
+	FocusedItem    int // 0: log view, 1: input field
 	lastLogContent string // Cache for incremental updates
 	isScrolling    bool // Track if user is actively scrolling
 	lastScrollTime time.Time // Track when user last scrolled
@@ -35,7 +35,7 @@ func NewProcessDetailPageView(tuiApp *TUIApp) *ProcessDetailPageView {
 		inputField:     tview.NewInputField(),
 		statusBar:      tview.NewTextView(),
 		autoScroll:     true,
-		focusedItem:    0,
+		FocusedItem:    0,
 		lastLogContent: "",
 		isScrolling:    false,
 		lastScrollTime: time.Now(),
@@ -157,13 +157,13 @@ func (p *ProcessDetailPageView) handleInputSubmit(key tcell.Key) {
 
 // switchFocus switches focus between log view and input field
 func (p *ProcessDetailPageView) switchFocus() {
-	if p.focusedItem == 0 {
-		p.focusedItem = 1
+	if p.FocusedItem == 0 {
+		p.FocusedItem = 1
 		p.tuiApp.app.SetFocus(p.inputField)
 		p.logView.SetTitle(" Logs ")
 		p.inputField.SetTitle(" Send Input (Press Enter to send) [FOCUSED] ")
 	} else {
-		p.focusedItem = 0
+		p.FocusedItem = 0
 		p.tuiApp.app.SetFocus(p.logView)
 		p.logView.SetTitle(" Logs [FOCUSED] ")
 		p.inputField.SetTitle(" Send Input (Press Enter to send) ")
@@ -257,7 +257,7 @@ func (p *ProcessDetailPageView) updateScrollStatus() {
 	}
 	
 	title := fmt.Sprintf(" Logs [Auto-scroll: %s] ", autoScrollStatus)
-	if p.focusedItem == 0 {
+	if p.FocusedItem == 0 {
 		title += "[FOCUSED]"
 	}
 	p.logView.SetTitle(title)

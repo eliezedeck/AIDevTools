@@ -105,6 +105,21 @@ func (t *TUIApp) handleSignals() {
 
 // handleGlobalKeys handles global keyboard shortcuts
 func (t *TUIApp) handleGlobalKeys(event *tcell.EventKey) *tcell.EventKey {
+	// Check if we're in the process detail page with input field focused
+	if t.currentPage == ProcessDetailPage && t.processDetailPage != nil {
+		// Check if the input field is focused
+		if t.processDetailPage.FocusedItem == 1 {
+			// Let the input field handle the key event first
+			// Only handle Tab key for switching focus
+			if event.Key() == tcell.KeyTab {
+				t.processDetailPage.switchFocus()
+				return nil
+			}
+			// Pass all other keys to the input field
+			return event
+		}
+	}
+
 	switch event.Key() {
 	case tcell.KeyTab:
 		// Switch to next page
