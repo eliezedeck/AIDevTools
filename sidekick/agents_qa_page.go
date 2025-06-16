@@ -81,10 +81,10 @@ func (p *AgentsQAPageView) setupStatusBar() {
 
 // setupLayout creates the main layout
 func (p *AgentsQAPageView) setupLayout() {
-	// Main layout - 2 columns with equal width
+	// Main layout - 2 columns: table (60%) and detail view (40%)
 	mainContent := tview.NewFlex().SetDirection(tview.FlexColumn).
-		AddItem(p.qaTable, 0, 1, true).
-		AddItem(p.detailView, 0, 1, false)
+		AddItem(p.qaTable, 0, 3, true).
+		AddItem(p.detailView, 0, 2, false)
 
 	// Vertical layout with status bar
 	p.view = tview.NewFlex().SetDirection(tview.FlexRow).
@@ -263,26 +263,35 @@ func (p *AgentsQAPageView) populateTableIncremental() {
 	p.lastSpecialistData = p.copySpecialistData(specialistGroups)
 }
 
-// getQAsBySpecialist returns Q&As grouped by specialist
+// getQAsBySpecialist returns Q&As grouped by specialist name
 func (p *AgentsQAPageView) getQAsBySpecialist() map[string][]*QuestionAnswer {
 	allQAs := agentQARegistry.GetAllQAs()
+	allSpecialists := agentQARegistry.ListSpecialists()
 
-	// Group by specialist (To field)
+	// Create a map from specialty to specialist name
+	specialtyToName := make(map[string]string)
+	for _, specialist := range allSpecialists {
+		specialtyToName[specialist.Specialty] = specialist.Name
+	}
+
+	// Group by specialist name (not specialty)
 	specialistGroups := make(map[string][]*QuestionAnswer)
 	for _, qa := range allQAs {
-		specialist := qa.To
-		if specialist == "" {
-			specialist = "Unknown Specialist"
+		specialistName := specialtyToName[qa.To]
+		if specialistName == "" {
+			specialistName = qa.To // Fallback to specialty if no name found
+			if specialistName == "" {
+				specialistName = "Unknown Specialist"
+			}
 		}
-		specialistGroups[specialist] = append(specialistGroups[specialist], qa)
+		specialistGroups[specialistName] = append(specialistGroups[specialistName], qa)
 	}
 
 	// Also include registered specialists that don't have any Q&As yet
-	allSpecialists := agentQARegistry.ListSpecialists()
 	for _, specialist := range allSpecialists {
-		if _, exists := specialistGroups[specialist.Specialty]; !exists {
+		if _, exists := specialistGroups[specialist.Name]; !exists {
 			// Initialize empty slice for specialists with no Q&As
-			specialistGroups[specialist.Specialty] = []*QuestionAnswer{}
+			specialistGroups[specialist.Name] = []*QuestionAnswer{}
 		}
 	}
 
@@ -399,7 +408,7 @@ func (p *AgentsQAPageView) buildTableContent(specialistGroups map[string][]*Ques
 		// Add specialist header row
 		specialistText := fmt.Sprintf("📁 %s (%d Q&As)", specialistName, len(qas))
 		if specialist != nil {
-			specialistText += fmt.Sprintf(" - %s", specialist.Status)
+			specialistText = fmt.Sprintf("📁 %s (%s) (%d Q&As) - %s", specialist.Name, specialist.Specialty, len(qas), specialist.Status)
 		}
 		specialistColor := tcell.ColorLime
 		if p.getSpecialistStatus(qas) == "Inactive" {
