@@ -4,7 +4,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log"
 	"os"
 	"os/signal"
 	"runtime"
@@ -484,7 +483,7 @@ func main() {
 				// Force exit after timeout to prevent hanging
 				go func() {
 					time.Sleep(5 * time.Second)
-					log.Printf("Force exit after shutdown timeout")
+					LogWarn("Main", "Force exit after shutdown timeout")
 					os.Exit(1)
 				}()
 			case <-shutdownChan:
@@ -496,7 +495,8 @@ func main() {
 
 		// Start SSE server (blocks until shutdown)
 		if err := StartSSEServer(s, config); err != nil {
-			log.Fatalf("Failed to start SSE server: %v\n", err)
+			LogError("Main", "Failed to start SSE server", err.Error())
+			os.Exit(1)
 		}
 
 		// SSE server has shut down - exit immediately
