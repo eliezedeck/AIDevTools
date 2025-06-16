@@ -179,19 +179,37 @@ func (r *AgentQARegistry) AskQuestion(from, specialty, question string, timeout 
 
 	r.mutex.Unlock()
 
-	// Send question to specialist's queue
-	select {
-	case queue <- qa:
-		// Question sent successfully
-		LogInfo("AgentQA", fmt.Sprintf("Question %s sent to specialist '%s'", qa.ID, specialist.Name))
-	default:
-		// Queue is full
-		r.mutex.Lock()
-		qa.Status = QAStatusFailed
-		qa.Error = "Specialist queue is full"
-		delete(r.waiters, qa.ID)
-		r.mutex.Unlock()
-		return qa, fmt.Errorf("specialist queue is full")
+	// Send question to specialist's queue with panic recovery
+	func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				EmergencyLog("AgentQA", "Panic sending question to queue", fmt.Sprintf("Question: %s, Specialist: %s, Panic: %v", qa.ID, specialist.Name, rec))
+				// Mark question as failed due to panic
+				r.mutex.Lock()
+				qa.Status = QAStatusFailed
+				qa.Error = "Failed to send question - specialist disconnected"
+				delete(r.waiters, qa.ID)
+				r.mutex.Unlock()
+			}
+		}()
+
+		select {
+		case queue <- qa:
+			// Question sent successfully
+			LogInfo("AgentQA", fmt.Sprintf("Question %s sent to specialist '%s'", qa.ID, specialist.Name))
+		default:
+			// Queue is full or closed
+			r.mutex.Lock()
+			qa.Status = QAStatusFailed
+			qa.Error = "Specialist queue is full or specialist disconnected"
+			delete(r.waiters, qa.ID)
+			r.mutex.Unlock()
+		}
+	}()
+
+	// Check if question sending failed
+	if qa.Status == QAStatusFailed {
+		return qa, fmt.Errorf(qa.Error)
 	}
 
 	// Wait for response with timeout
@@ -222,6 +240,13 @@ func (r *AgentQARegistry) WaitForQuestion(specialty string, timeout time.Duratio
 
 // WaitForQuestionWithContext waits for a question for a specialist with context cancellation support
 func (r *AgentQARegistry) WaitForQuestionWithContext(ctx context.Context, specialty string, timeout time.Duration) (*QuestionAnswer, error) {
+	// Add panic recovery for channel operations
+	defer func() {
+		if rec := recover(); rec != nil {
+			EmergencyLog("AgentQA", "Panic in WaitForQuestionWithContext", fmt.Sprintf("Specialty: %s, Panic: %v", specialty, rec))
+		}
+	}()
+
 	r.mutex.RLock()
 
 	// Check if specialist exists
@@ -242,11 +267,15 @@ func (r *AgentQARegistry) WaitForQuestionWithContext(ctx context.Context, specia
 	specialist.Status = "available"
 	r.mutex.RUnlock()
 
-	// Wait for question with context cancellation support
+	// Wait for question with context cancellation support and closed channel handling
 	if timeout == 0 {
 		// No timeout - block until question arrives or context is cancelled
 		select {
-		case qa := <-queue:
+		case qa, ok := <-queue:
+			if !ok {
+				// Channel was closed (specialist disconnected)
+				return nil, fmt.Errorf("specialist queue closed - session disconnected")
+			}
 			r.mutex.Lock()
 			qa.Status = QAStatusProcessing
 			specialist.Status = "busy"
@@ -258,7 +287,11 @@ func (r *AgentQARegistry) WaitForQuestionWithContext(ctx context.Context, specia
 	} else {
 		// With timeout and context cancellation
 		select {
-		case qa := <-queue:
+		case qa, ok := <-queue:
+			if !ok {
+				// Channel was closed (specialist disconnected)
+				return nil, fmt.Errorf("specialist queue closed - session disconnected")
+			}
 			r.mutex.Lock()
 			qa.Status = QAStatusProcessing
 			specialist.Status = "busy"
@@ -358,6 +391,13 @@ func (r *AgentQARegistry) GetAllQAs() []*QuestionAnswer {
 
 // CleanupForSession removes all specialists and Q&As for a given session
 func (r *AgentQARegistry) CleanupForSession(sessionID string) {
+	// Add panic recovery for cleanup operations
+	defer func() {
+		if rec := recover(); rec != nil {
+			EmergencyLog("AgentQA", "Panic in CleanupForSession", fmt.Sprintf("SessionID: %s, Panic: %v", sessionID, rec))
+		}
+	}()
+
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
 
@@ -366,9 +406,17 @@ func (r *AgentQARegistry) CleanupForSession(sessionID string) {
 		if agent.SessionID == sessionID {
 			delete(r.specialists, specialty)
 
-			// Close the question queue
+			// Safely close the question queue
 			if queue, exists := r.qaQueues[specialty]; exists {
-				close(queue)
+				// Close channel safely - any waiting goroutines will receive the closed signal
+				go func(ch chan *QuestionAnswer, spec string) {
+					defer func() {
+						if r := recover(); r != nil {
+							EmergencyLog("AgentQA", "Panic closing queue channel", fmt.Sprintf("Specialty: %s, Panic: %v", spec, r))
+						}
+					}()
+					close(ch)
+				}(queue, specialty)
 				delete(r.qaQueues, specialty)
 			}
 
@@ -434,19 +482,37 @@ func (r *AgentQARegistry) AskQuestionAsync(from, specialty, question string) (*Q
 
 	r.mutex.Unlock()
 
-	// Send question to specialist's queue
-	select {
-	case queue <- qa:
-		// Question sent successfully
-		LogInfo("AgentQA", fmt.Sprintf("Question %s sent to specialist '%s'", qa.ID, specialist.Name))
-	default:
-		// Queue is full
-		r.mutex.Lock()
-		qa.Status = QAStatusFailed
-		qa.Error = "Specialist queue is full"
-		delete(r.waiters, qa.ID)
-		r.mutex.Unlock()
-		return qa, fmt.Errorf("specialist queue is full")
+	// Send question to specialist's queue with panic recovery
+	func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				EmergencyLog("AgentQA", "Panic sending async question to queue", fmt.Sprintf("Question: %s, Specialist: %s, Panic: %v", qa.ID, specialist.Name, rec))
+				// Mark question as failed due to panic
+				r.mutex.Lock()
+				qa.Status = QAStatusFailed
+				qa.Error = "Failed to send question - specialist disconnected"
+				delete(r.waiters, qa.ID)
+				r.mutex.Unlock()
+			}
+		}()
+
+		select {
+		case queue <- qa:
+			// Question sent successfully
+			LogInfo("AgentQA", fmt.Sprintf("Question %s sent to specialist '%s'", qa.ID, specialist.Name))
+		default:
+			// Queue is full or closed
+			r.mutex.Lock()
+			qa.Status = QAStatusFailed
+			qa.Error = "Specialist queue is full or specialist disconnected"
+			delete(r.waiters, qa.ID)
+			r.mutex.Unlock()
+		}
+	}()
+
+	// Check if question sending failed
+	if qa.Status == QAStatusFailed {
+		return qa, fmt.Errorf(qa.Error)
 	}
 
 	// Return immediately with the question ID
@@ -479,11 +545,18 @@ func (r *AgentQARegistry) GetAnswer(questionID string, timeout time.Duration) (*
 	}
 	r.mutex.RUnlock()
 
-	// Wait for answer with timeout
+	// Wait for answer with timeout and closed channel handling
 	if timeout == 0 {
 		// No timeout - wait indefinitely
 		select {
-		case updatedQA := <-waiter:
+		case updatedQA, ok := <-waiter:
+			if !ok {
+				// Channel was closed (session disconnected)
+				r.mutex.RLock()
+				currentQA := r.qaHistory[questionID]
+				r.mutex.RUnlock()
+				return currentQA, fmt.Errorf("answer channel closed - session disconnected")
+			}
 			return updatedQA, nil
 		case <-time.After(24 * time.Hour): // Fallback timeout to prevent infinite hangs
 			r.mutex.RLock()
@@ -494,7 +567,14 @@ func (r *AgentQARegistry) GetAnswer(questionID string, timeout time.Duration) (*
 	} else {
 		// With timeout
 		select {
-		case updatedQA := <-waiter:
+		case updatedQA, ok := <-waiter:
+			if !ok {
+				// Channel was closed (session disconnected)
+				r.mutex.RLock()
+				currentQA := r.qaHistory[questionID]
+				r.mutex.RUnlock()
+				return currentQA, fmt.Errorf("answer channel closed - session disconnected")
+			}
 			return updatedQA, nil
 		case <-time.After(timeout):
 			// Return the current state of the Q&A
@@ -520,6 +600,13 @@ func (r *AgentQARegistry) startCleanupRoutine() {
 
 // cleanupExpiredEntries removes Q&A entries that have expired
 func (r *AgentQARegistry) cleanupExpiredEntries() {
+	// Add panic recovery for cleanup operations
+	defer func() {
+		if rec := recover(); rec != nil {
+			EmergencyLog("AgentQA", "Panic in cleanupExpiredEntries", fmt.Sprintf("Panic: %v", rec))
+		}
+	}()
+
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
 
@@ -530,7 +617,15 @@ func (r *AgentQARegistry) cleanupExpiredEntries() {
 		if now.After(qa.ExpiresAt) {
 			// Clean up waiter channel if exists
 			if waiter, exists := r.waiters[id]; exists {
-				close(waiter)
+				// Safely close the waiter channel
+				func() {
+					defer func() {
+						if rec := recover(); rec != nil {
+							EmergencyLog("AgentQA", "Panic closing waiter channel", fmt.Sprintf("QuestionID: %s, Panic: %v", id, rec))
+						}
+					}()
+					close(waiter)
+				}()
 				delete(r.waiters, id)
 			}
 
