@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"sync"
 	"time"
 )
@@ -88,13 +89,13 @@ func (l *Logger) Log(level LogLevel, source, message string, details ...string) 
 	if l.consoleOutput && !isTUIActiveCheck() {
 		timestamp := entry.Timestamp.Format("15:04:05")
 		levelStr := entry.Level.String()
-		
+
 		// Format: [HH:MM:SS] LEVEL [Source] Message
 		output := fmt.Sprintf("[%s] %s [%s] %s", timestamp, levelStr, source, message)
 		if entry.Details != "" {
 			output += fmt.Sprintf(" - %s", entry.Details)
 		}
-		
+
 		// In non-TUI mode, print to console
 		fmt.Println(output)
 	}
@@ -192,4 +193,34 @@ func GetLogEntries() []LogEntry {
 // ClearLogs clears all logs from the global logger
 func ClearLogs() {
 	logger.Clear()
+}
+
+// EmergencyLog outputs critical messages directly to stderr, bypassing all TUI state checks
+// This is used for TUI crashes, panics, and other critical errors that must be visible
+func EmergencyLog(source, message string, details ...string) {
+	timestamp := time.Now().Format("15:04:05")
+	output := fmt.Sprintf("[%s] EMERGENCY [%s] %s", timestamp, source, message)
+	if len(details) > 0 && details[0] != "" {
+		output += fmt.Sprintf(" - %s", details[0])
+	}
+
+	// Always output to stderr regardless of TUI state
+	fmt.Fprintf(os.Stderr, "%s\n", output)
+
+	// Also add to log entries for TUI display (if TUI recovers)
+	logger.Log(LogLevelError, source, fmt.Sprintf("EMERGENCY: %s", message), details...)
+}
+
+// ForceTerminalReset attempts to reset the terminal to a normal state
+// This is used when TUI crashes to restore terminal functionality
+func ForceTerminalReset() {
+	// ANSI escape sequences to reset terminal state:
+	// \033[?1049l - Exit alternate screen buffer
+	// \033[0m     - Reset all attributes (colors, bold, etc.)
+	// \033[2J     - Clear entire screen
+	// \033[H      - Move cursor to home position (1,1)
+	// \033[?25h   - Show cursor
+	// \033[?1000l - Disable mouse reporting
+	resetSequence := "\033[?1049l\033[0m\033[2J\033[H\033[?25h\033[?1000l"
+	fmt.Fprint(os.Stderr, resetSequence)
 }

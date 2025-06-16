@@ -191,14 +191,21 @@ func handleGetNextQuestion(ctx context.Context, request mcp.CallToolRequest) (*m
 	}
 
 	// Wait for next question with context cancellation support
+	LogInfo("AgentQA", "Waiting for next question", fmt.Sprintf("Specialty: %s, Timeout: %v", specialty, timeout))
+
 	qa, err := agentQARegistry.WaitForQuestionWithContext(waitCtx, specialty, timeout)
 	if err != nil {
+		LogError("AgentQA", "Error waiting for question", fmt.Sprintf("Specialty: %s, Error: %v", specialty, err))
+
 		// Check if error is due to context cancellation
 		if ctx.Err() != nil {
+			LogInfo("AgentQA", "Request cancelled by context", fmt.Sprintf("Context error: %v", ctx.Err()))
 			return mcp.NewToolResultError("Request cancelled"), nil
 		}
 		return mcp.NewToolResultError(err.Error()), nil
 	}
+
+	LogInfo("AgentQA", "Question received", fmt.Sprintf("QuestionID: %s, From: %s", qa.ID, qa.From))
 
 	result := map[string]any{
 		"question_id": qa.ID,
@@ -207,7 +214,13 @@ func handleGetNextQuestion(ctx context.Context, request mcp.CallToolRequest) (*m
 		"timestamp":   qa.Timestamp.Format(time.RFC3339),
 	}
 
-	resultBytes, _ := json.Marshal(result)
+	resultBytes, err := json.Marshal(result)
+	if err != nil {
+		LogError("AgentQA", "Failed to marshal response", fmt.Sprintf("Error: %v", err))
+		return mcp.NewToolResultError("Failed to marshal response"), nil
+	}
+
+	LogInfo("AgentQA", "Returning question response", fmt.Sprintf("ResponseSize: %d bytes", len(resultBytes)))
 	return mcp.NewToolResultText(string(resultBytes)), nil
 }
 

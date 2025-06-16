@@ -10,17 +10,17 @@ import (
 
 // AgentsQAPageView represents the agents Q&A tracking page - IDIOMATIC IMPLEMENTATION
 type AgentsQAPageView struct {
-	tuiApp             *TUIApp
-	view               *tview.Flex
-	specialistsList    *tview.List
-	qaTable            *tview.Table
-	detailView         *tview.TextView
-	statusBar          *tview.TextView
-	selectedRow        int
-	focusedItem        int // 0: specialists list, 1: table, 2: detail view
-	lastQACount        int // Cache for incremental updates
-	currentDetailID    string
-	selectedSpecialty  string
+	tuiApp            *TUIApp
+	view              *tview.Flex
+	specialistsList   *tview.List
+	qaTable           *tview.Table
+	detailView        *tview.TextView
+	statusBar         *tview.TextView
+	selectedRow       int
+	focusedItem       int // 0: specialists list, 1: table, 2: detail view
+	lastQACount       int // Cache for incremental updates
+	currentDetailID   string
+	selectedSpecialty string
 }
 
 // NewAgentsQAPageView creates a new agents Q&A page view
@@ -231,7 +231,7 @@ func (p *AgentsQAPageView) showSelectedDetails() {
 	detail += fmt.Sprintf("[yellow]From Agent:[white] %s\n", qa.From)
 	detail += fmt.Sprintf("[yellow]To Specialist:[white] %s\n", qa.To)
 	detail += fmt.Sprintf("[yellow]Status:[white] %s\n\n", p.getStatusColor(qa.Status))
-	
+
 	detail += "[yellow]Question:[white]\n"
 	detail += qa.Question + "\n\n"
 
@@ -302,7 +302,7 @@ func (p *AgentsQAPageView) Refresh() {
 func (p *AgentsQAPageView) Update() {
 	p.populateSpecialistsList()
 	p.populateTableIncremental()
-	
+
 	// Update current detail view if something is selected
 	if p.currentDetailID != "" {
 		p.showSelectedDetails()
@@ -367,17 +367,17 @@ func (p *AgentsQAPageView) populateTable() {
 			SetTextColor(tcell.ColorLightBlue).
 			SetAlign(tview.AlignCenter).
 			SetReference(qa.ID)
-		
+
 		// From cell
 		fromCell := tview.NewTableCell(qa.From).
 			SetTextColor(tcell.ColorWhite).
 			SetAlign(tview.AlignCenter)
-		
+
 		// Question cell
 		questionCell := tview.NewTableCell(question).
 			SetTextColor(tcell.ColorWhite).
 			SetExpansion(1)
-		
+
 		// Status cell with color
 		statusColor := tcell.ColorWhite
 		switch qa.Status {
@@ -390,7 +390,7 @@ func (p *AgentsQAPageView) populateTable() {
 		case QAStatusFailed, QAStatusTimeout:
 			statusColor = tcell.ColorRed
 		}
-		
+
 		statusCell := tview.NewTableCell(string(qa.Status)).
 			SetTextColor(statusColor).
 			SetAlign(tview.AlignCenter)

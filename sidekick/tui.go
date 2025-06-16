@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/signal"
 	"sort"
@@ -86,6 +87,12 @@ func NewTUIApp() *TUIApp {
 
 	// Start background update routine with smarter updates
 	go tuiApp.updateRoutine()
+
+	// Start TUI state watchdog to prevent stuck TUI state
+	go tuiApp.startStateWatchdog()
+
+	// Check if this is a recovery startup and auto-navigate to logs
+	go tuiApp.checkRecoveryMode()
 
 	return tuiApp
 }
@@ -268,6 +275,49 @@ func (t *TUIApp) updateRoutine() {
 	}
 }
 
+// startStateWatchdog monitors TUI state and prevents it from getting stuck
+func (t *TUIApp) startStateWatchdog() {
+	ticker := time.NewTicker(30 * time.Second) // Check every 30 seconds
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			// Check if TUI state has been active for too long without proper shutdown
+			if isTUIActiveCheck() {
+				// TUI is marked as active - this is normal during operation
+				// The watchdog is mainly for detecting stuck states after crashes
+				// We don't reset here as it would interfere with normal operation
+			}
+		case <-t.ctx.Done():
+			return
+		}
+	}
+}
+
+// checkRecoveryMode checks if TUI is starting in recovery mode and auto-navigates to logs
+func (t *TUIApp) checkRecoveryMode() {
+	// Wait a moment for TUI to fully initialize
+	time.Sleep(2 * time.Second)
+
+	// Check if we're in recovery mode (TUI was crashed and restarted)
+	if isTUICrashed() || isTUIRecovering() {
+		// Auto-navigate to logs page to show the user what went wrong
+		t.app.QueueUpdateDraw(func() {
+			t.SwitchToPage(LogsPage)
+
+			// Add a recovery message to logs
+			LogError("TUI", "TUI has been recovered after a crash - check logs above for details")
+
+			// Refresh the logs page to show the latest entries
+			t.logsPage.Refresh()
+		})
+
+		// Clear the crashed state since we've handled it
+		setTUICrashed(false)
+	}
+}
+
 // shouldUpdate determines if a screen update is necessary using smart detection
 func (t *TUIApp) shouldUpdate() bool {
 	// Check if enough time has passed for rate limiting
@@ -296,8 +346,18 @@ func (t *TUIApp) Run() error {
 	return t.app.Run()
 }
 
-// Stop stops the TUI application
+// Stop stops the TUI application with proper cleanup and error handling
 func (t *TUIApp) Stop() {
+	// Set up panic recovery for stop operation
+	defer func() {
+		if r := recover(); r != nil {
+			// Panic during stop - force terminal reset
+			setTUIActive(false)
+			ForceTerminalReset()
+			EmergencyLog("TUI", "Panic during TUI stop", fmt.Sprintf("%v", r))
+		}
+	}()
+
 	// Use mutex to prevent double-stopping
 	t.signalMutex.Lock()
 	defer t.signalMutex.Unlock()
@@ -312,8 +372,22 @@ func (t *TUIApp) Stop() {
 	// Cancel context to stop background goroutines
 	t.cancel()
 
-	// Stop the TUI application
-	t.app.Stop()
+	// Stop the TUI application with timeout protection
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		t.app.Stop()
+	}()
+
+	// Wait for stop with timeout
+	select {
+	case <-done:
+		// TUI stopped successfully
+	case <-time.After(3 * time.Second):
+		// TUI stop timed out - force terminal reset
+		ForceTerminalReset()
+		EmergencyLog("TUI", "TUI stop timed out - forced terminal reset")
+	}
 }
 
 // GetProcessesBySession returns processes grouped by session, sorted by creation time

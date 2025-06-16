@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
@@ -189,13 +190,24 @@ func (p *LogsPageView) Refresh() {
 
 		// Level column with color
 		levelCell := tview.NewTableCell(log.Level.String())
+
+		// Check for recovery/crash messages and highlight them
+		isRecoveryMessage := strings.Contains(log.Message, "recovered") ||
+			strings.Contains(log.Message, "recovery") ||
+			strings.Contains(log.Message, "crash") ||
+			strings.Contains(log.Source, "TUI")
+
 		switch log.Level {
 		case LogLevelInfo:
 			levelCell.SetTextColor(tcell.ColorGreen)
 		case LogLevelWarn:
 			levelCell.SetTextColor(tcell.ColorYellow)
 		case LogLevelError:
-			levelCell.SetTextColor(tcell.ColorRed)
+			if isRecoveryMessage {
+				levelCell.SetTextColor(tcell.ColorOrange) // Highlight recovery messages
+			} else {
+				levelCell.SetTextColor(tcell.ColorRed)
+			}
 		}
 		p.table.SetCell(row, 1, levelCell)
 

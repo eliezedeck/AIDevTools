@@ -23,15 +23,64 @@ func NewTUIManager() *TUIManager {
 	}
 }
 
-// Start starts the TUI application
+// Start starts the TUI application with proper error handling and cleanup
 func (tm *TUIManager) Start() error {
-	// TUI starting - no logging allowed in TUI mode
+	// Set up panic recovery for TUI crashes
+	defer func() {
+		if r := recover(); r != nil {
+			// TUI crashed - perform emergency cleanup
+			tm.handleTUICrash(r)
+		}
+	}()
 
+	// TUI starting - no logging allowed in TUI mode
 	// Create the TUI application
 	tm.app = NewTUIApp()
 
 	// Start the TUI application (blocks until stopped)
 	return tm.app.Run()
+}
+
+// handleTUICrash handles TUI crashes with proper cleanup and auto-recovery
+func (tm *TUIManager) handleTUICrash(panicValue interface{}) {
+	// Mark TUI as inactive and crashed immediately
+	setTUIActive(false)
+	setTUICrashed(true)
+
+	// Force terminal reset to restore normal terminal state
+	ForceTerminalReset()
+
+	// Log the crash with emergency logging (bypasses TUI state checks)
+	panicMsg := fmt.Sprintf("TUI crashed with panic: %v", panicValue)
+	EmergencyLog("TUI", "TUI application crashed unexpectedly", panicMsg)
+
+	// Try to stop the TUI application gracefully if it exists
+	if tm.app != nil {
+		// Use a timeout to prevent hanging during cleanup
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			tm.app.Stop()
+		}()
+
+		// Wait for cleanup with timeout
+		select {
+		case <-done:
+			EmergencyLog("TUI", "TUI cleanup completed successfully")
+		case <-time.After(2 * time.Second):
+			EmergencyLog("TUI", "TUI cleanup timed out - forcing exit")
+		}
+	}
+
+	// Cancel context to signal shutdown
+	tm.cancel()
+
+	// Give user a moment to see the error message, then attempt recovery
+	time.Sleep(1 * time.Second)
+
+	// Attempt auto-recovery
+	EmergencyLog("TUI", "Attempting TUI auto-recovery...")
+	go attemptTUIRecovery()
 }
 
 // Stop stops the TUI application
@@ -51,7 +100,7 @@ func IsTUIMode() bool {
 	return globalSSEServer != nil
 }
 
-// StartTUIIfEnabled starts the TUI if conditions are met
+// StartTUIIfEnabled starts the TUI if conditions are met with proper error handling
 func StartTUIIfEnabled() *TUIManager {
 	if !IsTUIMode() {
 		return nil
@@ -59,11 +108,22 @@ func StartTUIIfEnabled() *TUIManager {
 
 	tuiManager := NewTUIManager()
 
-	// Start TUI in a separate goroutine
+	// Start TUI in a separate goroutine with comprehensive error handling
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				// Panic recovered, but can't log in TUI mode
+				// Panic in TUI startup - perform emergency cleanup
+				setTUIActive(false)
+				setTUICrashed(true)
+				ForceTerminalReset()
+				EmergencyLog("TUI", "TUI startup failed with panic", fmt.Sprintf("%v", r))
+
+				// Cancel the TUI manager context
+				tuiManager.cancel()
+
+				// Attempt auto-recovery
+				EmergencyLog("TUI", "Attempting TUI auto-recovery after startup failure...")
+				go attemptTUIRecovery()
 			}
 		}()
 
@@ -71,7 +131,15 @@ func StartTUIIfEnabled() *TUIManager {
 		time.Sleep(100 * time.Millisecond)
 
 		if err := tuiManager.Start(); err != nil {
-			// TUI error occurred, but can't log in TUI mode
+			// TUI error occurred - ensure proper cleanup
+			setTUIActive(false)
+			setTUICrashed(true)
+			ForceTerminalReset()
+			EmergencyLog("TUI", "TUI failed to start", err.Error())
+
+			// Attempt auto-recovery
+			EmergencyLog("TUI", "Attempting TUI auto-recovery after start failure...")
+			go attemptTUIRecovery()
 		}
 	}()
 

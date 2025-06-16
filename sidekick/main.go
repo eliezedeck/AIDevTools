@@ -31,8 +31,10 @@ var shutdownOnce sync.Once
 
 // TUI state tracking for mutual exclusivity with logging
 var (
-	isTUIActive bool
-	tuiMutex    sync.RWMutex
+	isTUIActive   bool
+	tuiCrashed    bool
+	tuiRecovering bool
+	tuiMutex      sync.RWMutex
 )
 
 // setTUIActive safely sets the TUI active state
@@ -47,6 +49,89 @@ func isTUIActiveCheck() bool {
 	tuiMutex.RLock()
 	defer tuiMutex.RUnlock()
 	return isTUIActive
+}
+
+// setTUICrashed safely sets the TUI crashed state
+func setTUICrashed(crashed bool) {
+	tuiMutex.Lock()
+	defer tuiMutex.Unlock()
+	tuiCrashed = crashed
+}
+
+// isTUICrashed safely checks if TUI has crashed
+func isTUICrashed() bool {
+	tuiMutex.RLock()
+	defer tuiMutex.RUnlock()
+	return tuiCrashed
+}
+
+// setTUIRecovering safely sets the TUI recovering state
+func setTUIRecovering(recovering bool) {
+	tuiMutex.Lock()
+	defer tuiMutex.Unlock()
+	tuiRecovering = recovering
+}
+
+// isTUIRecovering safely checks if TUI is in recovery mode
+func isTUIRecovering() bool {
+	tuiMutex.RLock()
+	defer tuiMutex.RUnlock()
+	return tuiRecovering
+}
+
+// attemptTUIRecovery attempts to restart TUI after a crash with auto-navigation to logs
+func attemptTUIRecovery() {
+	if isTUIRecovering() {
+		return // Already attempting recovery
+	}
+
+	setTUIRecovering(true)
+	defer setTUIRecovering(false)
+
+	EmergencyLog("TUI", "Attempting TUI auto-recovery after crash...")
+
+	// Wait a moment for things to settle
+	time.Sleep(1 * time.Second)
+
+	// Create a new TUI manager for recovery
+	recoveryManager := NewTUIManager()
+	globalTUIManager = recoveryManager
+
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				// Recovery failed - don't try again
+				setTUIActive(false)
+				setTUICrashed(true)
+				ForceTerminalReset()
+				EmergencyLog("TUI", "TUI recovery failed", fmt.Sprintf("Recovery panic: %v", r))
+				return
+			}
+		}()
+
+		// Small delay before recovery attempt
+		time.Sleep(500 * time.Millisecond)
+		setTUIActive(true)
+		setTUICrashed(false)
+
+		// Log the recovery attempt
+		LogError("TUI", "TUI crashed and is being recovered - switching to logs page")
+
+		if err := recoveryManager.Start(); err != nil {
+			setTUIActive(false)
+			setTUICrashed(true)
+			ForceTerminalReset()
+			EmergencyLog("TUI", "TUI recovery failed to start", err.Error())
+		} else {
+			setTUIActive(false)
+			LogInfo("TUI", "TUI recovery completed successfully")
+		}
+
+		// Trigger shutdown after recovery attempt
+		shutdownOnce.Do(func() {
+			close(shutdownChan)
+		})
+	}()
 }
 
 func main() {
@@ -339,14 +424,43 @@ func main() {
 			tuiManager = NewTUIManager()
 			globalTUIManager = tuiManager // Store globally for shutdown handling
 			go func() {
+				// Set up comprehensive panic recovery for TUI startup
+				defer func() {
+					if r := recover(); r != nil {
+						// TUI startup panic - perform emergency cleanup
+						setTUIActive(false)
+						setTUICrashed(true)
+						ForceTerminalReset()
+						EmergencyLog("TUI", "TUI startup panic", fmt.Sprintf("%v", r))
+
+						// Attempt auto-recovery instead of immediate shutdown
+						EmergencyLog("TUI", "Attempting TUI auto-recovery after startup panic...")
+						go attemptTUIRecovery()
+						return
+					}
+				}()
+
 				// Small delay to ensure SSE server is started first
 				time.Sleep(200 * time.Millisecond)
 				setTUIActive(true)
+
 				if err := tuiManager.Start(); err != nil {
+					// TUI failed to start - ensure proper cleanup
 					setTUIActive(false)
-					log.Printf("TUI error: %v", err)
+					setTUICrashed(true)
+					ForceTerminalReset()
+					EmergencyLog("TUI", "TUI failed to start", err.Error())
+
+					// Attempt auto-recovery
+					EmergencyLog("TUI", "Attempting TUI auto-recovery after start failure...")
+					go attemptTUIRecovery()
+					return
+				} else {
+					// TUI exited normally
+					setTUIActive(false)
+					LogInfo("TUI", "TUI exited normally")
 				}
-				setTUIActive(false)
+
 				// TUI has exited, trigger shutdown of entire application
 				LogInfo("TUI", "TUI exited, shutting down sidekick...")
 				shutdownOnce.Do(func() {
