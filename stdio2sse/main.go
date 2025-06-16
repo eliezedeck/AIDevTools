@@ -182,11 +182,8 @@ func (b *StdioBridge) Initialize(ctx context.Context, name string, version strin
 			default:
 			}
 
-			// Forward the call to the SSE server with timeout
-			callCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-			defer cancel()
-
-			result, err := sseClient.CallTool(callCtx, request)
+			// Forward the call to the SSE server (no timeout - allow indefinite waits)
+			result, err := sseClient.CallTool(ctx, request)
 			if err != nil {
 				// Check if it's a context cancellation error
 				if ctx.Err() != nil {
@@ -200,7 +197,6 @@ func (b *StdioBridge) Initialize(ctx context.Context, name string, version strin
 
 		// Register the tool with our stdio server
 		b.stdioServer.AddTool(toolCopy, handler)
-		log.Printf("Registered tool: %s\n", tool.Name)
 	}
 
 	// Store the client for later use
