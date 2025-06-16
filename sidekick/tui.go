@@ -21,8 +21,8 @@ const (
 	ProcessesPage PageType = iota
 	ProcessDetailPage
 	NotificationsPage
-	LogsPage
 	AgentsQAPage
+	LogsPage
 )
 
 // TUIApp represents the main TUI application - IDIOMATIC IMPLEMENTATION
@@ -149,10 +149,10 @@ func (t *TUIApp) handleGlobalKeys(event *tcell.EventKey) *tcell.EventKey {
 			t.SwitchToPage(NotificationsPage)
 			return nil
 		case '3':
-			t.SwitchToPage(LogsPage)
+			t.SwitchToPage(AgentsQAPage)
 			return nil
 		case '4':
-			t.SwitchToPage(AgentsQAPage)
+			t.SwitchToPage(LogsPage)
 			return nil
 		case 'q', 'Q':
 			// Show quit confirmation dialog
@@ -187,10 +187,10 @@ func (t *TUIApp) switchToNextPage() {
 	case ProcessesPage:
 		t.SwitchToPage(NotificationsPage)
 	case NotificationsPage:
-		t.SwitchToPage(LogsPage)
-	case LogsPage:
 		t.SwitchToPage(AgentsQAPage)
 	case AgentsQAPage:
+		t.SwitchToPage(LogsPage)
+	case LogsPage:
 		t.SwitchToPage(ProcessesPage)
 	case ProcessDetailPage:
 		t.SwitchToPage(ProcessesPage)
@@ -201,13 +201,13 @@ func (t *TUIApp) switchToNextPage() {
 func (t *TUIApp) switchToPrevPage() {
 	switch t.currentPage {
 	case ProcessesPage:
-		t.SwitchToPage(AgentsQAPage)
+		t.SwitchToPage(LogsPage)
 	case NotificationsPage:
 		t.SwitchToPage(ProcessesPage)
-	case LogsPage:
-		t.SwitchToPage(NotificationsPage)
 	case AgentsQAPage:
-		t.SwitchToPage(LogsPage)
+		t.SwitchToPage(NotificationsPage)
+	case LogsPage:
+		t.SwitchToPage(AgentsQAPage)
 	case ProcessDetailPage:
 		t.SwitchToPage(ProcessesPage)
 	}
