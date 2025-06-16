@@ -175,6 +175,7 @@ func (sm *SessionManager) GetAllSessions() map[string]*Session {
 func ExtractSessionFromContext(ctx context.Context) string {
 	// Check if we're in SSE mode
 	if globalSSEServer == nil {
+		LogInfo("Session", "Not in SSE mode, no session ID", "")
 		return "" // stdio mode, no session
 	}
 
@@ -182,6 +183,13 @@ func ExtractSessionFromContext(ctx context.Context) string {
 	session := server.ClientSessionFromContext(ctx)
 	if session != nil {
 		sessionID := session.SessionID()
+		LogInfo("Session", "Extracted session ID from context", fmt.Sprintf("SessionID: '%s', Length: %d", sessionID, len(sessionID)))
+
+		// Validate session ID format
+		if sessionID == "" {
+			LogInfo("Session", "Empty session ID extracted", "")
+			return ""
+		}
 
 		// Ensure the session exists in our SessionManager
 		// This is important because sessions are created by the MCP library
@@ -191,6 +199,7 @@ func ExtractSessionFromContext(ctx context.Context) string {
 		return sessionID
 	}
 
+	LogInfo("Session", "No session found in context", "")
 	return ""
 }
 

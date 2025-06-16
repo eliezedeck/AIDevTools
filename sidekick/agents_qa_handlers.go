@@ -29,8 +29,18 @@ func handleRegisterSpecialist(ctx context.Context, request mcp.CallToolRequest) 
 	// Extract session ID from context (for SSE mode)
 	sessionID := ExtractSessionFromContext(ctx)
 
+	// Log session information for debugging
+	LogInfo("AgentQA", "Registering specialist", fmt.Sprintf("Name: %s, Specialty: %s, RootDir: %s, SessionID: '%s'", name, specialty, rootDir, sessionID))
+
+	// For SSE mode, warn if no session ID but allow registration
+	if globalSSEServer != nil && sessionID == "" {
+		LogInfo("AgentQA", "No session ID found in SSE mode, allowing registration anyway", "")
+		sessionID = "anonymous" // Use a placeholder session ID
+	}
+
 	agent, err := agentQARegistry.RegisterSpecialist(name, specialty, rootDir, sessionID)
 	if err != nil {
+		LogError("AgentQA", "Failed to register specialist", fmt.Sprintf("Error: %v", err))
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 
@@ -40,6 +50,7 @@ func handleRegisterSpecialist(ctx context.Context, request mcp.CallToolRequest) 
 		"specialty": agent.Specialty,
 		"root_dir":  agent.RootDir,
 		"status":    string(agent.Status),
+		"key":       fmt.Sprintf("%s-%s", agent.RootDir, agent.Specialty),
 	}
 
 	resultBytes, _ := json.Marshal(result)
@@ -319,6 +330,7 @@ func handleListSpecialists(ctx context.Context, request mcp.CallToolRequest) (*m
 			"specialty": agent.Specialty,
 			"root_dir":  agent.RootDir,
 			"status":    string(agent.Status),
+			"key":       fmt.Sprintf("%s-%s", agent.RootDir, agent.Specialty),
 		})
 	}
 

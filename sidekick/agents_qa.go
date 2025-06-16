@@ -58,9 +58,9 @@ type SpecialistAgent struct {
 
 // AgentQARegistry manages Q&A exchanges and specialist registrations
 type AgentQARegistry struct {
-	specialists map[string]*SpecialistAgent     // key: specialty
+	specialists map[string][]*SpecialistAgent   // key: "<root-dir>-<specialty>", value: list of specialists
 	qaHistory   map[string]*QuestionAnswer      // key: Q&A ID
-	qaQueues    map[string]chan *QuestionAnswer // key: specialty
+	qaQueues    map[string]chan *QuestionAnswer // key: "<root-dir>-<specialty>"
 	waiters     map[string]chan *QuestionAnswer // key: Q&A ID, for answer responses
 	mutex       sync.RWMutex
 }
@@ -68,7 +68,7 @@ type AgentQARegistry struct {
 // NewAgentQARegistry creates a new agent Q&A registry
 func NewAgentQARegistry() *AgentQARegistry {
 	r := &AgentQARegistry{
-		specialists: make(map[string]*SpecialistAgent),
+		specialists: make(map[string][]*SpecialistAgent),
 		qaHistory:   make(map[string]*QuestionAnswer),
 		qaQueues:    make(map[string]chan *QuestionAnswer),
 		waiters:     make(map[string]chan *QuestionAnswer),
@@ -83,9 +83,18 @@ func (r *AgentQARegistry) RegisterSpecialist(name, specialty, rootDir, sessionID
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
 
-	// Check if specialty already registered
-	if existing, exists := r.specialists[specialty]; exists {
-		return nil, fmt.Errorf("specialty '%s' already registered by agent '%s'", specialty, existing.Name)
+	// Create the key as "<root-dir>-<specialty>"
+	key := fmt.Sprintf("%s-%s", rootDir, specialty)
+
+	// Check if there's already an active specialist for this key
+	if existingList, exists := r.specialists[key]; exists {
+		// Check if any existing specialist is still connected
+		for _, existing := range existingList {
+			if existing.Status != SpecialistDisconnected {
+				return nil, fmt.Errorf("specialty '%s' in project '%s' already registered by agent '%s' (status: %s)", specialty, rootDir, existing.Name, existing.Status)
+			}
+		}
+		LogInfo("AgentQA", fmt.Sprintf("Adding new specialist '%s' for '%s' (existing disconnected specialists found)", name, key))
 	}
 
 	agent := &SpecialistAgent{
@@ -97,40 +106,67 @@ func (r *AgentQARegistry) RegisterSpecialist(name, specialty, rootDir, sessionID
 		Status:    SpecialistAvailable,
 	}
 
-	r.specialists[specialty] = agent
+	// Add to the list of specialists for this key
+	r.specialists[key] = append(r.specialists[key], agent)
 
-	// Create question queue for this specialty
-	r.qaQueues[specialty] = make(chan *QuestionAnswer, 100)
+	// Create question queue for this key (or recreate if it was closed)
+	r.qaQueues[key] = make(chan *QuestionAnswer, 100)
 
-	LogInfo("AgentQA", fmt.Sprintf("Registered specialist '%s' for '%s'", name, specialty))
+	LogInfo("AgentQA", fmt.Sprintf("Registered specialist '%s' (ID: %s) for '%s'", name, agent.ID, key))
 
 	return agent, nil
 }
 
-// UnregisterSpecialist removes a specialist agent
-func (r *AgentQARegistry) UnregisterSpecialist(specialty string) {
+// UnregisterSpecialist removes a specialist agent by key
+func (r *AgentQARegistry) UnregisterSpecialist(key string) {
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
 
-	if agent, exists := r.specialists[specialty]; exists {
-		delete(r.specialists, specialty)
+	if agentList, exists := r.specialists[key]; exists {
+		delete(r.specialists, key)
 
 		// Close the question queue
-		if queue, exists := r.qaQueues[specialty]; exists {
+		if queue, exists := r.qaQueues[key]; exists {
 			close(queue)
-			delete(r.qaQueues, specialty)
+			delete(r.qaQueues, key)
 		}
 
-		LogInfo("AgentQA", fmt.Sprintf("Unregistered specialist '%s' for '%s'", agent.Name, specialty))
+		// Log all specialists being unregistered
+		for _, agent := range agentList {
+			LogInfo("AgentQA", fmt.Sprintf("Unregistered specialist '%s' (ID: %s) for '%s'", agent.Name, agent.ID, key))
+		}
 	}
 }
 
-// GetSpecialist returns a specialist for a given specialty
+// GetSpecialist returns the first active specialist for a given specialty
 func (r *AgentQARegistry) GetSpecialist(specialty string) *SpecialistAgent {
 	r.mutex.RLock()
 	defer r.mutex.RUnlock()
 
-	return r.specialists[specialty]
+	// Look through all keys to find a matching specialty
+	for _, agentList := range r.specialists {
+		for _, agent := range agentList {
+			if agent.Specialty == specialty && agent.Status != SpecialistDisconnected {
+				return agent
+			}
+		}
+	}
+	return nil
+}
+
+// GetSpecialistByKey returns the first active specialist for a given key
+func (r *AgentQARegistry) GetSpecialistByKey(key string) *SpecialistAgent {
+	r.mutex.RLock()
+	defer r.mutex.RUnlock()
+
+	if agentList, exists := r.specialists[key]; exists {
+		for _, agent := range agentList {
+			if agent.Status != SpecialistDisconnected {
+				return agent
+			}
+		}
+	}
+	return nil
 }
 
 // ListSpecialists returns all registered specialists (including disconnected ones)
@@ -138,13 +174,18 @@ func (r *AgentQARegistry) ListSpecialists() []*SpecialistAgent {
 	r.mutex.RLock()
 	defer r.mutex.RUnlock()
 
-	agents := make([]*SpecialistAgent, 0, len(r.specialists))
-	for _, agent := range r.specialists {
-		agents = append(agents, agent)
+	agents := make([]*SpecialistAgent, 0)
+	for _, agentList := range r.specialists {
+		for _, agent := range agentList {
+			agents = append(agents, agent)
+		}
 	}
 
-	// Sort by specialty
+	// Sort by specialty, then by name
 	sort.Slice(agents, func(i, j int) bool {
+		if agents[i].Specialty == agents[j].Specialty {
+			return agents[i].Name < agents[j].Name
+		}
 		return agents[i].Specialty < agents[j].Specialty
 	})
 
@@ -156,16 +197,21 @@ func (r *AgentQARegistry) ListActiveSpecialists() []*SpecialistAgent {
 	r.mutex.RLock()
 	defer r.mutex.RUnlock()
 
-	agents := make([]*SpecialistAgent, 0, len(r.specialists))
-	for _, agent := range r.specialists {
-		// Only include specialists that are not disconnected
-		if agent.Status != SpecialistDisconnected {
-			agents = append(agents, agent)
+	agents := make([]*SpecialistAgent, 0)
+	for _, agentList := range r.specialists {
+		for _, agent := range agentList {
+			// Only include specialists that are not disconnected
+			if agent.Status != SpecialistDisconnected {
+				agents = append(agents, agent)
+			}
 		}
 	}
 
-	// Sort by specialty
+	// Sort by specialty, then by name
 	sort.Slice(agents, func(i, j int) bool {
+		if agents[i].Specialty == agents[j].Specialty {
+			return agents[i].Name < agents[j].Name
+		}
 		return agents[i].Specialty < agents[j].Specialty
 	})
 
@@ -176,15 +222,29 @@ func (r *AgentQARegistry) ListActiveSpecialists() []*SpecialistAgent {
 func (r *AgentQARegistry) AskQuestion(from, specialty, question string, timeout time.Duration) (*QuestionAnswer, error) {
 	r.mutex.Lock()
 
-	// Check if specialist exists
-	specialist := r.specialists[specialty]
-	if specialist == nil {
-		r.mutex.Unlock()
-		return nil, fmt.Errorf("no specialist registered for '%s'", specialty)
+	// Find an active specialist for this specialty
+	var specialist *SpecialistAgent
+	var key string
+	for k, agentList := range r.specialists {
+		for _, agent := range agentList {
+			if agent.Specialty == specialty && agent.Status != SpecialistDisconnected {
+				specialist = agent
+				key = k
+				break
+			}
+		}
+		if specialist != nil {
+			break
+		}
 	}
 
-	// Get the queue for this specialty
-	queue, exists := r.qaQueues[specialty]
+	if specialist == nil {
+		r.mutex.Unlock()
+		return nil, fmt.Errorf("no active specialist registered for '%s'", specialty)
+	}
+
+	// Get the queue for this key
+	queue, exists := r.qaQueues[key]
 	if !exists {
 		r.mutex.Unlock()
 		return nil, fmt.Errorf("no queue for specialty '%s'", specialty)
@@ -280,15 +340,29 @@ func (r *AgentQARegistry) WaitForQuestionWithContext(ctx context.Context, specia
 
 	r.mutex.RLock()
 
-	// Check if specialist exists
-	specialist := r.specialists[specialty]
+	// Find an active specialist for this specialty
+	var specialist *SpecialistAgent
+	var key string
+	for k, agentList := range r.specialists {
+		for _, agent := range agentList {
+			if agent.Specialty == specialty && agent.Status != SpecialistDisconnected {
+				specialist = agent
+				key = k
+				break
+			}
+		}
+		if specialist != nil {
+			break
+		}
+	}
+
 	if specialist == nil {
 		r.mutex.RUnlock()
 		return nil, fmt.Errorf("specialist not registered for '%s'", specialty)
 	}
 
-	// Get the queue for this specialty
-	queue, exists := r.qaQueues[specialty]
+	// Get the queue for this key
+	queue, exists := r.qaQueues[key]
 	if !exists {
 		r.mutex.RUnlock()
 		return nil, fmt.Errorf("no queue for specialty '%s'", specialty)
@@ -372,9 +446,14 @@ func (r *AgentQARegistry) AnswerQuestion(questionID, answer string, err error) e
 		qa.Answer = answer
 	}
 
-	// Update specialist status
-	if specialist, exists := r.specialists[qa.To]; exists {
-		specialist.Status = SpecialistAvailable
+	// Update specialist status - find the specialist by name
+	for _, agentList := range r.specialists {
+		for _, agent := range agentList {
+			if agent.Name == qa.To {
+				agent.Status = SpecialistAvailable
+				break
+			}
+		}
 	}
 
 	// Send response to waiting channel
@@ -433,26 +512,28 @@ func (r *AgentQARegistry) CleanupForSession(sessionID string) {
 	defer r.mutex.Unlock()
 
 	// Find and mark specialists as disconnected for this session (keep them in registry)
-	for specialty, agent := range r.specialists {
-		if agent.SessionID == sessionID {
-			// Mark specialist as disconnected instead of deleting
-			agent.Status = SpecialistDisconnected
+	for key, agentList := range r.specialists {
+		for _, agent := range agentList {
+			if agent.SessionID == sessionID {
+				// Mark specialist as disconnected instead of deleting
+				agent.Status = SpecialistDisconnected
 
-			// Safely close the question queue
-			if queue, exists := r.qaQueues[specialty]; exists {
-				// Close channel safely - any waiting goroutines will receive the closed signal
-				go func(ch chan *QuestionAnswer, spec string) {
-					defer func() {
-						if r := recover(); r != nil {
-							EmergencyLog("AgentQA", "Panic closing queue channel", fmt.Sprintf("Specialty: %s, Panic: %v", spec, r))
-						}
-					}()
-					close(ch)
-				}(queue, specialty)
-				delete(r.qaQueues, specialty)
+				// Safely close the question queue
+				if queue, exists := r.qaQueues[key]; exists {
+					// Close channel safely - any waiting goroutines will receive the closed signal
+					go func(ch chan *QuestionAnswer, k string) {
+						defer func() {
+							if r := recover(); r != nil {
+								EmergencyLog("AgentQA", "Panic closing queue channel", fmt.Sprintf("Key: %s, Panic: %v", k, r))
+							}
+						}()
+						close(ch)
+					}(queue, key)
+					delete(r.qaQueues, key)
+				}
+
+				LogInfo("AgentQA", fmt.Sprintf("Marked specialist '%s' (ID: %s) as disconnected for session %s", agent.Name, agent.ID, sessionID))
 			}
-
-			LogInfo("AgentQA", fmt.Sprintf("Marked specialist '%s' as disconnected for session %s", agent.Name, sessionID))
 		}
 	}
 
@@ -480,15 +561,29 @@ func (r *AgentQARegistry) CleanupForSession(sessionID string) {
 func (r *AgentQARegistry) AskQuestionAsync(from, specialty, question string) (*QuestionAnswer, error) {
 	r.mutex.Lock()
 
-	// Check if specialist exists
-	specialist := r.specialists[specialty]
-	if specialist == nil {
-		r.mutex.Unlock()
-		return nil, fmt.Errorf("no specialist registered for '%s'", specialty)
+	// Find an active specialist for this specialty
+	var specialist *SpecialistAgent
+	var key string
+	for k, agentList := range r.specialists {
+		for _, agent := range agentList {
+			if agent.Specialty == specialty && agent.Status != SpecialistDisconnected {
+				specialist = agent
+				key = k
+				break
+			}
+		}
+		if specialist != nil {
+			break
+		}
 	}
 
-	// Get the queue for this specialty
-	queue, exists := r.qaQueues[specialty]
+	if specialist == nil {
+		r.mutex.Unlock()
+		return nil, fmt.Errorf("no active specialist registered for '%s'", specialty)
+	}
+
+	// Get the queue for this key
+	queue, exists := r.qaQueues[key]
 	if !exists {
 		r.mutex.Unlock()
 		return nil, fmt.Errorf("no queue for specialty '%s'", specialty)
@@ -677,15 +772,23 @@ func (r *AgentQARegistry) GetQAsBySpecialty(specialty string) []*QuestionAnswer 
 	r.mutex.RLock()
 	defer r.mutex.RUnlock()
 
-	// Get the specialist for this specialty
-	specialist := r.specialists[specialty]
-	if specialist == nil {
+	// Collect all specialist names for this specialty
+	specialistNames := make(map[string]bool)
+	for _, agentList := range r.specialists {
+		for _, agent := range agentList {
+			if agent.Specialty == specialty {
+				specialistNames[agent.Name] = true
+			}
+		}
+	}
+
+	if len(specialistNames) == 0 {
 		return []*QuestionAnswer{}
 	}
 
 	qas := make([]*QuestionAnswer, 0)
 	for _, qa := range r.qaHistory {
-		if qa.To == specialist.Name {
+		if specialistNames[qa.To] {
 			qas = append(qas, qa)
 		}
 	}

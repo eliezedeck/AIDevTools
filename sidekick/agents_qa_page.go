@@ -433,8 +433,8 @@ func (p *AgentsQAPageView) updateSpecialistHeaderRow(row int, cell *tview.TableC
 				}
 
 				// Rebuild the specialist text with current status
-				specialistText := fmt.Sprintf("📁 %s (%s) (%d Q&As) - %s",
-					specialist.Name, specialist.Specialty, len(qas), specialist.Status)
+				specialistText := fmt.Sprintf("📁 %s (%s) [ID: %s] (%d Q&As) - %s",
+					specialist.Name, specialist.Specialty, specialist.ID, len(qas), specialist.Status)
 
 				// Set color based on current specialist status
 				specialistColor := tcell.ColorLime // Default for available
@@ -490,7 +490,7 @@ func (p *AgentsQAPageView) buildTableContent(specialistGroups map[string][]*Ques
 		// Add specialist header row
 		specialistText := fmt.Sprintf("📁 %s (%d Q&As)", specialistName, len(qas))
 		if specialist != nil {
-			specialistText = fmt.Sprintf("📁 %s (%s) (%d Q&As) - %s", specialist.Name, specialist.Specialty, len(qas), specialist.Status)
+			specialistText = fmt.Sprintf("📁 %s (%s) [ID: %s] (%d Q&As) - %s", specialist.Name, specialist.Specialty, specialist.ID, len(qas), specialist.Status)
 		}
 
 		// Set color based on specialist status
@@ -583,15 +583,23 @@ func (p *AgentsQAPageView) getStatusColor2(status QAStatus) tcell.Color {
 	}
 }
 
-// getSpecialistInfo gets specialist information by name
+// getSpecialistInfo gets specialist information by name (returns the first active one, or first found if none active)
 func (p *AgentsQAPageView) getSpecialistInfo(name string) *SpecialistAgent {
 	specialists := agentQARegistry.ListSpecialists()
+	var firstFound *SpecialistAgent
+
 	for _, specialist := range specialists {
 		if specialist.Name == name {
-			return specialist
+			if firstFound == nil {
+				firstFound = specialist
+			}
+			// Prefer active specialists
+			if specialist.Status != SpecialistDisconnected {
+				return specialist
+			}
 		}
 	}
-	return nil
+	return firstFound
 }
 
 // getSpecialistStatus determines if a specialist is active based on its Q&As
