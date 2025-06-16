@@ -81,10 +81,10 @@ func (p *AgentsQAPageView) setupStatusBar() {
 
 // setupLayout creates the main layout
 func (p *AgentsQAPageView) setupLayout() {
-	// Main layout - 2 columns like processes page
+	// Main layout - 2 columns with equal width
 	mainContent := tview.NewFlex().SetDirection(tview.FlexColumn).
 		AddItem(p.qaTable, 0, 1, true).
-		AddItem(p.detailView, 50, 0, false)
+		AddItem(p.detailView, 0, 1, false)
 
 	// Vertical layout with status bar
 	p.view = tview.NewFlex().SetDirection(tview.FlexRow).
