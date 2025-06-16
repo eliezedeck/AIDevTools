@@ -35,15 +35,25 @@ type QuestionAnswer struct {
 	ExpiresAt      time.Time // When this Q&A entry expires (6 hours after creation)
 }
 
+// SpecialistStatus represents the status of a specialist agent
+type SpecialistStatus string
+
+const (
+	SpecialistAvailable    SpecialistStatus = "available"
+	SpecialistBusy         SpecialistStatus = "busy"
+	SpecialistDisconnected SpecialistStatus = "disconnected"
+	SpecialistOffline      SpecialistStatus = "offline"
+)
+
 // SpecialistAgent represents a registered specialist agent
 type SpecialistAgent struct {
 	ID        string
 	Name      string
 	Specialty string
-	RootDir   string // Root directory of the project this specialist is specialized in
-	SessionID string // MCP session ID
-	ProcessID string // If spawned via sidekick
-	Status    string // "available", "busy", "offline"
+	RootDir   string           // Root directory of the project this specialist is specialized in
+	SessionID string           // MCP session ID
+	ProcessID string           // If spawned via sidekick
+	Status    SpecialistStatus // "available", "busy", "disconnected", "offline"
 }
 
 // AgentQARegistry manages Q&A exchanges and specialist registrations
@@ -84,7 +94,7 @@ func (r *AgentQARegistry) RegisterSpecialist(name, specialty, rootDir, sessionID
 		Specialty: specialty,
 		RootDir:   rootDir,
 		SessionID: sessionID,
-		Status:    "available",
+		Status:    SpecialistAvailable,
 	}
 
 	r.specialists[specialty] = agent
@@ -123,7 +133,7 @@ func (r *AgentQARegistry) GetSpecialist(specialty string) *SpecialistAgent {
 	return r.specialists[specialty]
 }
 
-// ListSpecialists returns all registered specialists
+// ListSpecialists returns all registered specialists (including disconnected ones)
 func (r *AgentQARegistry) ListSpecialists() []*SpecialistAgent {
 	r.mutex.RLock()
 	defer r.mutex.RUnlock()
@@ -131,6 +141,27 @@ func (r *AgentQARegistry) ListSpecialists() []*SpecialistAgent {
 	agents := make([]*SpecialistAgent, 0, len(r.specialists))
 	for _, agent := range r.specialists {
 		agents = append(agents, agent)
+	}
+
+	// Sort by specialty
+	sort.Slice(agents, func(i, j int) bool {
+		return agents[i].Specialty < agents[j].Specialty
+	})
+
+	return agents
+}
+
+// ListActiveSpecialists returns only connected specialists (excludes disconnected ones)
+func (r *AgentQARegistry) ListActiveSpecialists() []*SpecialistAgent {
+	r.mutex.RLock()
+	defer r.mutex.RUnlock()
+
+	agents := make([]*SpecialistAgent, 0, len(r.specialists))
+	for _, agent := range r.specialists {
+		// Only include specialists that are not disconnected
+		if agent.Status != SpecialistDisconnected {
+			agents = append(agents, agent)
+		}
 	}
 
 	// Sort by specialty
@@ -264,7 +295,7 @@ func (r *AgentQARegistry) WaitForQuestionWithContext(ctx context.Context, specia
 	}
 
 	// Update specialist status
-	specialist.Status = "available"
+	specialist.Status = SpecialistAvailable
 	r.mutex.RUnlock()
 
 	// Wait for question with context cancellation support and closed channel handling
@@ -278,7 +309,7 @@ func (r *AgentQARegistry) WaitForQuestionWithContext(ctx context.Context, specia
 			}
 			r.mutex.Lock()
 			qa.Status = QAStatusProcessing
-			specialist.Status = "busy"
+			specialist.Status = SpecialistBusy
 			r.mutex.Unlock()
 			return qa, nil
 		case <-ctx.Done():
@@ -294,7 +325,7 @@ func (r *AgentQARegistry) WaitForQuestionWithContext(ctx context.Context, specia
 			}
 			r.mutex.Lock()
 			qa.Status = QAStatusProcessing
-			specialist.Status = "busy"
+			specialist.Status = SpecialistBusy
 			r.mutex.Unlock()
 			return qa, nil
 		case <-time.After(timeout):
@@ -343,7 +374,7 @@ func (r *AgentQARegistry) AnswerQuestion(questionID, answer string, err error) e
 
 	// Update specialist status
 	if specialist, exists := r.specialists[qa.To]; exists {
-		specialist.Status = "available"
+		specialist.Status = SpecialistAvailable
 	}
 
 	// Send response to waiting channel
@@ -401,10 +432,11 @@ func (r *AgentQARegistry) CleanupForSession(sessionID string) {
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
 
-	// Find and remove specialists for this session
+	// Find and mark specialists as disconnected for this session (keep them in registry)
 	for specialty, agent := range r.specialists {
 		if agent.SessionID == sessionID {
-			delete(r.specialists, specialty)
+			// Mark specialist as disconnected instead of deleting
+			agent.Status = SpecialistDisconnected
 
 			// Safely close the question queue
 			if queue, exists := r.qaQueues[specialty]; exists {
@@ -420,7 +452,7 @@ func (r *AgentQARegistry) CleanupForSession(sessionID string) {
 				delete(r.qaQueues, specialty)
 			}
 
-			LogInfo("AgentQA", fmt.Sprintf("Cleaned up specialist '%s' for session %s", agent.Name, sessionID))
+			LogInfo("AgentQA", fmt.Sprintf("Marked specialist '%s' as disconnected for session %s", agent.Name, sessionID))
 		}
 	}
 

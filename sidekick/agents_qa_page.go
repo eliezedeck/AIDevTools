@@ -410,8 +410,23 @@ func (p *AgentsQAPageView) buildTableContent(specialistGroups map[string][]*Ques
 		if specialist != nil {
 			specialistText = fmt.Sprintf("📁 %s (%s) (%d Q&As) - %s", specialist.Name, specialist.Specialty, len(qas), specialist.Status)
 		}
-		specialistColor := tcell.ColorLime
-		if p.getSpecialistStatus(qas) == "Inactive" {
+
+		// Set color based on specialist status
+		specialistColor := tcell.ColorLime // Default for available
+		if specialist != nil {
+			switch string(specialist.Status) {
+			case "disconnected":
+				specialistColor = tcell.ColorRed
+			case "busy":
+				specialistColor = tcell.ColorYellow
+			case "offline":
+				specialistColor = tcell.ColorGray
+			case "available":
+				specialistColor = tcell.ColorLime
+			default:
+				specialistColor = tcell.ColorWhite
+			}
+		} else if p.getSpecialistStatus(qas) == "Inactive" {
 			specialistColor = tcell.ColorGray
 		}
 

@@ -39,7 +39,7 @@ func handleRegisterSpecialist(ctx context.Context, request mcp.CallToolRequest) 
 		"name":      agent.Name,
 		"specialty": agent.Specialty,
 		"root_dir":  agent.RootDir,
-		"status":    agent.Status,
+		"status":    string(agent.Status),
 	}
 
 	resultBytes, _ := json.Marshal(result)
@@ -306,9 +306,10 @@ func handleAskSpecialist(ctx context.Context, request mcp.CallToolRequest) (*mcp
 	return mcp.NewToolResultText(string(resultBytes)), nil
 }
 
-// handleListSpecialists lists all available specialists
+// handleListSpecialists lists all active (connected) specialists
 func handleListSpecialists(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	specialists := agentQARegistry.ListSpecialists()
+	// Only return active specialists (excludes disconnected ones)
+	specialists := agentQARegistry.ListActiveSpecialists()
 
 	result := make([]map[string]any, 0, len(specialists))
 	for _, agent := range specialists {
@@ -317,7 +318,7 @@ func handleListSpecialists(ctx context.Context, request mcp.CallToolRequest) (*m
 			"name":      agent.Name,
 			"specialty": agent.Specialty,
 			"root_dir":  agent.RootDir,
-			"status":    agent.Status,
+			"status":    string(agent.Status),
 		})
 	}
 
