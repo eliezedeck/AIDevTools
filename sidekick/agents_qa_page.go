@@ -277,6 +277,15 @@ func (p *AgentsQAPageView) getQAsBySpecialist() map[string][]*QuestionAnswer {
 		specialistGroups[specialist] = append(specialistGroups[specialist], qa)
 	}
 
+	// Also include registered specialists that don't have any Q&As yet
+	allSpecialists := agentQARegistry.ListSpecialists()
+	for _, specialist := range allSpecialists {
+		if _, exists := specialistGroups[specialist.Specialty]; !exists {
+			// Initialize empty slice for specialists with no Q&As
+			specialistGroups[specialist.Specialty] = []*QuestionAnswer{}
+		}
+	}
+
 	return specialistGroups
 }
 
@@ -347,8 +356,8 @@ func (p *AgentsQAPageView) incrementalUpdate(specialistGroups map[string][]*Ques
 		if qaID, ok := cell.GetReference().(string); ok {
 			qa := agentQARegistry.GetQA(qaID)
 			if qa != nil {
-				// Update status cell color
-				statusCell := p.qaTable.GetCell(row, 3)
+				// Update status cell color (column 1, not 3)
+				statusCell := p.qaTable.GetCell(row, 1)
 				if statusCell != nil {
 					statusColor := p.getStatusColor2(qa.Status)
 					statusCell.SetText(string(qa.Status)).SetTextColor(statusColor)
