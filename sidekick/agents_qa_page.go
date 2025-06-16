@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
@@ -11,31 +12,33 @@ import (
 
 // AgentsQAPageView represents the agents Q&A tracking page - IDIOMATIC IMPLEMENTATION
 type AgentsQAPageView struct {
-	tuiApp             *TUIApp
-	view               *tview.Flex
-	qaTable            *tview.Table
-	detailView         *tview.TextView
-	statusBar          *tview.TextView
-	selectedRow        int
-	focusedItem        int                          // 0: table, 1: detail view
-	lastQACount        int                          // Cache for incremental updates
-	lastSpecialistData map[string][]*QuestionAnswer // Cache for incremental updates
-	currentDetailID    string
-	isInitialized      bool
+	tuiApp               *TUIApp
+	view                 *tview.Flex
+	qaTable              *tview.Table
+	detailView           *tview.TextView
+	statusBar            *tview.TextView
+	selectedRow          int
+	focusedItem          int                          // 0: table, 1: detail view
+	lastQACount          int                          // Cache for incremental updates
+	lastSpecialistData   map[string][]*QuestionAnswer // Cache for incremental updates
+	lastSpecialistStatus map[string]string            // Cache for specialist status tracking
+	currentDetailID      string
+	isInitialized        bool
 }
 
 // NewAgentsQAPageView creates a new agents Q&A page view
 func NewAgentsQAPageView(tuiApp *TUIApp) *AgentsQAPageView {
 	p := &AgentsQAPageView{
-		tuiApp:             tuiApp,
-		qaTable:            tview.NewTable(),
-		detailView:         tview.NewTextView(),
-		statusBar:          tview.NewTextView(),
-		selectedRow:        0,
-		focusedItem:        0,
-		lastQACount:        0,
-		lastSpecialistData: make(map[string][]*QuestionAnswer),
-		isInitialized:      false,
+		tuiApp:               tuiApp,
+		qaTable:              tview.NewTable(),
+		detailView:           tview.NewTextView(),
+		statusBar:            tview.NewTextView(),
+		selectedRow:          0,
+		focusedItem:          0,
+		lastQACount:          0,
+		lastSpecialistData:   make(map[string][]*QuestionAnswer),
+		lastSpecialistStatus: make(map[string]string),
+		isInitialized:        false,
 	}
 
 	p.setupTable()
@@ -255,12 +258,14 @@ func (p *AgentsQAPageView) populateTableIncremental() {
 		p.fullRebuild(specialistGroups)
 		p.isInitialized = true
 		p.lastSpecialistData = p.copySpecialistData(specialistGroups)
+		p.lastSpecialistStatus = p.copySpecialistStatus()
 		return
 	}
 
 	// IDIOMATIC INCREMENTAL UPDATES - only update what changed
 	p.incrementalUpdate(specialistGroups)
 	p.lastSpecialistData = p.copySpecialistData(specialistGroups)
+	p.lastSpecialistStatus = p.copySpecialistStatus()
 }
 
 // getQAsBySpecialist returns Q&As grouped by specialist name
@@ -312,6 +317,21 @@ func (p *AgentsQAPageView) majorChangesDetected(specialistGroups map[string][]*Q
 		}
 	}
 
+	// Check if any specialist status changed (important for disconnections)
+	currentSpecialists := agentQARegistry.ListSpecialists()
+	for _, specialist := range currentSpecialists {
+		if _, exists := specialistGroups[specialist.Name]; exists {
+			// Check if status changed from what we last cached
+			lastStatus, hadStatus := p.lastSpecialistStatus[specialist.Name]
+			currentStatus := string(specialist.Status)
+
+			if !hadStatus || lastStatus != currentStatus {
+				// Status changed - trigger full rebuild for reliability
+				return true
+			}
+		}
+	}
+
 	return false
 }
 
@@ -323,6 +343,16 @@ func (p *AgentsQAPageView) copySpecialistData(specialistGroups map[string][]*Que
 		for i, qa := range qas {
 			copy[specialist][i] = qa
 		}
+	}
+	return copy
+}
+
+// copySpecialistStatus creates a copy of specialist status for caching
+func (p *AgentsQAPageView) copySpecialistStatus() map[string]string {
+	copy := make(map[string]string)
+	specialists := agentQARegistry.ListSpecialists()
+	for _, specialist := range specialists {
+		copy[specialist.Name] = string(specialist.Status)
 	}
 	return copy
 }
@@ -355,22 +385,74 @@ func (p *AgentsQAPageView) incrementalUpdate(specialistGroups map[string][]*Ques
 	// Update the title and total count
 	p.updateTableTitle(specialistGroups)
 
-	// Update status colors for existing Q&As
+	// Update specialist headers and Q&A status colors
 	for row := 1; row < p.qaTable.GetRowCount(); row++ {
 		cell := p.qaTable.GetCell(row, 0)
-		if cell == nil || cell.GetReference() == nil {
-			continue // Skip specialist headers
+		if cell == nil {
+			continue
 		}
 
-		if qaID, ok := cell.GetReference().(string); ok {
-			qa := agentQARegistry.GetQA(qaID)
-			if qa != nil {
-				// Update status cell color (column 1, not 3)
-				statusCell := p.qaTable.GetCell(row, 1)
-				if statusCell != nil {
-					statusColor := p.getStatusColor2(qa.Status)
-					statusCell.SetText(string(qa.Status)).SetTextColor(statusColor)
+		if cell.GetReference() == nil {
+			// This is a specialist header row (no reference means it's not a Q&A)
+			p.updateSpecialistHeaderRow(row, cell, specialistGroups)
+		} else {
+			// This is a Q&A row (has reference)
+			if qaID, ok := cell.GetReference().(string); ok {
+				qa := agentQARegistry.GetQA(qaID)
+				if qa != nil {
+					// Update status cell color (column 1, not 3)
+					statusCell := p.qaTable.GetCell(row, 1)
+					if statusCell != nil {
+						statusColor := p.getStatusColor2(qa.Status)
+						statusCell.SetText(string(qa.Status)).SetTextColor(statusColor)
+					}
 				}
+			}
+		}
+	}
+}
+
+// updateSpecialistHeaderRow updates a specialist header row with current status
+func (p *AgentsQAPageView) updateSpecialistHeaderRow(row int, cell *tview.TableCell, specialistGroups map[string][]*QuestionAnswer) {
+	cellText := cell.Text
+
+	// Extract specialist name from the header text (format: "📁 Name (specialty) (N Q&As) - status")
+	if len(cellText) > 2 && cellText[:2] == "📁" {
+		// Find the specialist name by parsing the text
+		parts := strings.Split(cellText, " ")
+		if len(parts) >= 2 {
+			specialistName := parts[1] // Name is after the folder icon
+
+			// Get current specialist info
+			specialist := p.getSpecialistInfo(specialistName)
+			if specialist != nil {
+				// Get Q&As for this specialist
+				qas := specialistGroups[specialistName]
+				if qas == nil {
+					qas = []*QuestionAnswer{}
+				}
+
+				// Rebuild the specialist text with current status
+				specialistText := fmt.Sprintf("📁 %s (%s) (%d Q&As) - %s",
+					specialist.Name, specialist.Specialty, len(qas), specialist.Status)
+
+				// Set color based on current specialist status
+				specialistColor := tcell.ColorLime // Default for available
+				switch string(specialist.Status) {
+				case "disconnected":
+					specialistColor = tcell.ColorRed
+				case "busy":
+					specialistColor = tcell.ColorYellow
+				case "offline":
+					specialistColor = tcell.ColorGray
+				case "available":
+					specialistColor = tcell.ColorLime
+				default:
+					specialistColor = tcell.ColorWhite
+				}
+
+				// Update the cell with new text and color
+				cell.SetText(specialistText).SetTextColor(specialistColor)
 			}
 		}
 	}
