@@ -1,27 +1,47 @@
 package main
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
+	"strings"
+	"sync"
 	"syscall"
 	"time"
-
-	"github.com/mark3labs/mcp-go/client"
-	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/mark3labs/mcp-go/server"
 )
 
 // Version can be set at build time using -ldflags "-X main.version=x.x.x"
 var version = "dev"
 
-type StdioBridge struct {
-	stdioServer *server.MCPServer
-	sseClient   *client.Client
-	sseURL      string
+// JSONRPCMessage represents a generic JSON-RPC message
+type JSONRPCMessage struct {
+	JSONRPC string      `json:"jsonrpc"`
+	ID      interface{} `json:"id,omitempty"`
+	Method  string      `json:"method,omitempty"`
+	Params  interface{} `json:"params,omitempty"`
+	Result  interface{} `json:"result,omitempty"`
+	Error   interface{} `json:"error,omitempty"`
+}
+
+// AsyncStdioBridge handles the bridging between stdio and SSE with async support
+type AsyncStdioBridge struct {
+	sseURL          string
+	httpClient      *http.Client
+	stdin           *bufio.Reader
+	stdout          io.Writer
+	mutex           sync.Mutex
+	verbose         bool
+	sessionID       string
+	messageURL      string
+	pendingRequests map[interface{}]chan JSONRPCMessage
+	requestMutex    sync.RWMutex
 }
 
 func main() {
@@ -67,140 +87,259 @@ func main() {
 	}()
 
 	// Create the bridge
-	bridge := &StdioBridge{
-		sseURL: *sseURL,
+	bridge := &AsyncStdioBridge{
+		sseURL:          *sseURL,
+		httpClient:      &http.Client{Timeout: 0}, // No timeout for HTTP client
+		stdin:           bufio.NewReader(os.Stdin),
+		stdout:          os.Stdout,
+		verbose:         *verbose,
+		pendingRequests: make(map[interface{}]chan JSONRPCMessage),
 	}
 
-	// Initialize the bridge
-	if err := bridge.Initialize(ctx, *bridgeName, *bridgeVersion); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to initialize bridge: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Serve stdio
-	log.Printf("Starting stdio bridge connected to %s\n", *sseURL)
-
-	// Set up cleanup on exit
-	defer func() {
-		log.Println("Cleaning up stdio bridge...")
-		if bridge.sseClient != nil {
-			// Try to gracefully close the SSE client
-			if err := bridge.sseClient.Close(); err != nil {
-				log.Printf("Warning: Error closing SSE client: %v\n", err)
-			}
-		}
-		log.Println("Stdio bridge cleanup complete")
-	}()
-
-	if err := server.ServeStdio(bridge.stdioServer); err != nil {
-		fmt.Fprintf(os.Stderr, "Server error: %v\n", err)
+	// Initialize and run the bridge
+	if err := bridge.Run(ctx, *bridgeName, *bridgeVersion); err != nil {
+		fmt.Fprintf(os.Stderr, "Bridge error: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func (b *StdioBridge) Initialize(ctx context.Context, name string, version string) error {
-	// Create SSE client
-	log.Printf("Connecting to SSE server at %s...\n", b.sseURL)
+func (b *AsyncStdioBridge) Run(ctx context.Context, name, version string) error {
+	log.Printf("Starting async stdio bridge connected to %s\n", b.sseURL)
 
-	// Create a new SSE client
-	sseClient, err := client.NewSSEMCPClient(b.sseURL)
-	if err != nil {
-		return fmt.Errorf("failed to create SSE client: %w", err)
+	// Test SSE server connectivity
+	if err := b.testSSEConnection(); err != nil {
+		return fmt.Errorf("failed to connect to SSE server: %w", err)
 	}
 
-	// Start the client
-	if err := sseClient.Start(ctx); err != nil {
-		return fmt.Errorf("failed to start SSE client: %w", err)
-	}
+	// Start SSE listener for responses
+	go b.listenSSE(ctx)
 
-	// Initialize the connection with a timeout
-	initCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-
-	// Create initialization request
-	initRequest := mcp.InitializeRequest{
-		Params: mcp.InitializeParams{
-			ProtocolVersion: "2024-11-05",
-			ClientInfo: mcp.Implementation{
-				Name:    "stdio2sse",
-				Version: version,
-			},
-			Capabilities: mcp.ClientCapabilities{
-				Experimental: map[string]interface{}{},
-				Sampling:     nil,
-			},
-		},
-	}
-
-	// Initialize the client
-	initResult, err := sseClient.Initialize(initCtx, initRequest)
-	if err != nil {
-		return fmt.Errorf("failed to initialize SSE client: %w", err)
-	}
-
-	log.Printf("Connected to SSE server: %s version %s\n",
-		initResult.ServerInfo.Name,
-		initResult.ServerInfo.Version)
-
-	// Check if the server has tool capability
-	if initResult.Capabilities.Tools == nil {
-		log.Printf("Warning: SSE server does not advertise tool capability\n")
-	}
-
-	// List available tools from the SSE server
-	toolsCtx, toolsCancel := context.WithTimeout(ctx, 5*time.Second)
-	defer toolsCancel()
-
-	toolsResult, err := sseClient.ListTools(toolsCtx, mcp.ListToolsRequest{})
-	if err != nil {
-		return fmt.Errorf("failed to list tools from SSE server: %w", err)
-	}
-
-	log.Printf("Found %d tools on SSE server\n", len(toolsResult.Tools))
-
-	// Create stdio server
-	b.stdioServer = server.NewMCPServer(
-		name,
-		version,
-		server.WithToolCapabilities(false),
-	)
-
-	// Register each tool from the SSE server
-	for _, tool := range toolsResult.Tools {
-		// Make a copy of the tool for the closure
-		toolCopy := tool
-
-		// Create a proxy handler for this tool
-		handler := func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			// Update the request to use the correct tool name
-			request.Params.Name = toolCopy.Name
-
-			// Check if context is already cancelled before making the call
-			select {
-			case <-ctx.Done():
-				return nil, fmt.Errorf("request cancelled: %w", ctx.Err())
-			default:
-			}
-
-			// Forward the call to the SSE server (no timeout - allow indefinite waits)
-			result, err := sseClient.CallTool(ctx, request)
+	// Main message processing loop
+	for {
+		select {
+		case <-ctx.Done():
+			log.Println("Context cancelled, shutting down...")
+			return nil
+		default:
+			// Read a line from stdin
+			line, err := b.stdin.ReadBytes('\n')
 			if err != nil {
-				// Check if it's a context cancellation error
-				if ctx.Err() != nil {
-					return nil, fmt.Errorf("request cancelled: %w", ctx.Err())
+				if err == io.EOF {
+					log.Println("Stdin closed, shutting down...")
+					return nil
 				}
-				return nil, fmt.Errorf("SSE server error: %w", err)
+				return fmt.Errorf("failed to read from stdin: %w", err)
 			}
 
-			return result, nil
+			// Process the message asynchronously
+			go b.processMessage(ctx, line)
 		}
+	}
+}
 
-		// Register the tool with our stdio server
-		b.stdioServer.AddTool(toolCopy, handler)
+func (b *AsyncStdioBridge) testSSEConnection() error {
+	// Try to connect to the SSE endpoint to verify it's available
+	req, err := http.NewRequest("GET", b.sseURL, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create test request: %w", err)
 	}
 
-	// Store the client for later use
-	b.sseClient = sseClient
+	resp, err := b.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to connect to SSE server: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusMethodNotAllowed {
+		return fmt.Errorf("SSE server returned status %d", resp.StatusCode)
+	}
+
+	log.Printf("Successfully connected to SSE server")
+	return nil
+}
+
+func (b *AsyncStdioBridge) listenSSE(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			// Connect to SSE endpoint (without sessionId - let server create one)
+			req, err := http.NewRequestWithContext(ctx, "GET", b.sseURL, nil)
+			if err != nil {
+				log.Printf("Failed to create SSE request: %v", err)
+				time.Sleep(5 * time.Second)
+				continue
+			}
+
+			resp, err := b.httpClient.Do(req)
+			if err != nil {
+				log.Printf("Failed to connect to SSE: %v", err)
+				time.Sleep(5 * time.Second)
+				continue
+			}
+
+			// Read SSE events
+			scanner := bufio.NewScanner(resp.Body)
+			for scanner.Scan() {
+				line := scanner.Text()
+				if b.verbose {
+					log.Printf("SSE line: %s", line)
+				}
+
+				// Handle endpoint event (contains session ID and message URL)
+				if strings.HasPrefix(line, "event: endpoint") {
+					// Next line should contain the message URL
+					if scanner.Scan() {
+						dataLine := scanner.Text()
+						if strings.HasPrefix(dataLine, "data: ") {
+							messageURL := strings.TrimPrefix(dataLine, "data: ")
+							b.messageURL = messageURL
+							log.Printf("Received message endpoint: %s", messageURL)
+						}
+					}
+				} else if strings.HasPrefix(line, "event: message") {
+					// Next line should contain the JSON response
+					if scanner.Scan() {
+						dataLine := scanner.Text()
+						if strings.HasPrefix(dataLine, "data: ") {
+							data := strings.TrimPrefix(dataLine, "data: ")
+							b.handleSSEMessage(data)
+						}
+					}
+				}
+			}
+
+			resp.Body.Close()
+
+			// If we get here, the SSE connection was closed
+			log.Printf("SSE connection closed, reconnecting...")
+			time.Sleep(1 * time.Second)
+		}
+	}
+}
+
+func (b *AsyncStdioBridge) handleSSEMessage(data string) {
+	if b.verbose {
+		log.Printf("Received SSE message: %s", data)
+	}
+
+	var message JSONRPCMessage
+	if err := json.Unmarshal([]byte(data), &message); err != nil {
+		log.Printf("Failed to parse SSE message: %v", err)
+		return
+	}
+
+	// If this is a response to a pending request, send it to the waiting goroutine
+	if message.ID != nil {
+		b.requestMutex.RLock()
+		if ch, exists := b.pendingRequests[message.ID]; exists {
+			select {
+			case ch <- message:
+				// Message sent successfully
+			default:
+				// Channel is full or closed
+			}
+		}
+		b.requestMutex.RUnlock()
+	}
+
+	// Always send the message to stdout as well
+	b.sendResponse(message)
+}
+
+func (b *AsyncStdioBridge) processMessage(ctx context.Context, messageBytes []byte) {
+	// Trim whitespace
+	messageBytes = []byte(strings.TrimSpace(string(messageBytes)))
+
+	if len(messageBytes) == 0 {
+		return
+	}
+
+	if b.verbose {
+		log.Printf("Received message: %s", string(messageBytes))
+	}
+
+	// Parse the JSON-RPC message
+	var message JSONRPCMessage
+	if err := json.Unmarshal(messageBytes, &message); err != nil {
+		log.Printf("Failed to parse JSON-RPC message: %v", err)
+		return
+	}
+
+	// Forward to SSE server
+	if err := b.forwardToSSE(ctx, messageBytes, message.ID); err != nil {
+		// Send error response back to client
+		errorResponse := JSONRPCMessage{
+			JSONRPC: "2.0",
+			ID:      message.ID,
+			Error: map[string]interface{}{
+				"code":    -32603,
+				"message": fmt.Sprintf("SSE server error: %v", err),
+			},
+		}
+		b.sendResponse(errorResponse)
+	}
+}
+
+func (b *AsyncStdioBridge) forwardToSSE(ctx context.Context, messageBytes []byte, requestID interface{}) error {
+	// Wait for message URL to be available
+	for b.messageURL == "" {
+		time.Sleep(100 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("context cancelled while waiting for message URL")
+		default:
+		}
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", b.messageURL, strings.NewReader(string(messageBytes)))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+
+	if b.verbose {
+		log.Printf("Forwarding to SSE: %s", b.messageURL)
+	}
+
+	// Send request
+	resp, err := b.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to send request to SSE server: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
+		responseBytes, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("SSE server returned status %d: %s", resp.StatusCode, string(responseBytes))
+	}
 
 	return nil
+}
+
+func (b *AsyncStdioBridge) sendResponse(response JSONRPCMessage) {
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
+
+	responseBytes, err := json.Marshal(response)
+	if err != nil {
+		log.Printf("Failed to marshal response: %v", err)
+		return
+	}
+
+	if b.verbose {
+		log.Printf("Sending response: %s", string(responseBytes))
+	}
+
+	// Write response with newline
+	if _, err := fmt.Fprintf(b.stdout, "%s\n", string(responseBytes)); err != nil {
+		log.Printf("Failed to write response: %v", err)
+	}
+
+	// Flush if possible
+	if flusher, ok := b.stdout.(interface{ Flush() error }); ok {
+		flusher.Flush()
+	}
 }
