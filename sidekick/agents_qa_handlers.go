@@ -9,82 +9,9 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
-// handleRegisterSpecialist registers a specialist agent
-func handleRegisterSpecialist(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	name, err := request.RequireString("name")
-	if err != nil {
-		return mcp.NewToolResultError("Missing or invalid 'name' argument"), nil
-	}
-
-	specialty, err := request.RequireString("specialty")
-	if err != nil {
-		return mcp.NewToolResultError("Missing or invalid 'specialty' argument"), nil
-	}
-
-	rootDir, err := request.RequireString("root_dir")
-	if err != nil {
-		return mcp.NewToolResultError("Missing or invalid 'root_dir' argument"), nil
-	}
-
-	// Extract session ID from context (for SSE mode)
-	sessionID := ExtractSessionFromContext(ctx)
-
-	// Log session information for debugging
-	LogInfo("AgentQA", "Registering specialist", fmt.Sprintf("Name: %s, Specialty: %s, RootDir: %s, SessionID: '%s'", name, specialty, rootDir, sessionID))
-
-	// For SSE mode, warn if no session ID but allow registration
-	if globalSSEServer != nil && sessionID == "" {
-		LogInfo("AgentQA", "No session ID found in SSE mode, allowing registration anyway", "")
-		sessionID = "anonymous" // Use a placeholder session ID
-	}
-
-	agent, err := agentQARegistry.RegisterSpecialist(name, specialty, rootDir, sessionID)
-	if err != nil {
-		LogError("AgentQA", "Failed to register specialist", fmt.Sprintf("Error: %v", err))
-		return mcp.NewToolResultError(err.Error()), nil
-	}
-
-	result := map[string]any{
-		"id":        agent.ID,
-		"name":      agent.Name,
-		"specialty": agent.Specialty,
-		"root_dir":  agent.RootDir,
-		"status":    string(agent.Status),
-		"key":       fmt.Sprintf("%s-%s", agent.RootDir, agent.Specialty),
-	}
-
-	resultBytes, _ := json.Marshal(result)
-	return mcp.NewToolResultText(string(resultBytes)), nil
-}
 
 // handleAnswerQuestion provides an answer to a question. A question can only be answered once and only once.
 func handleAnswerQuestion(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	// Extract session ID to find specialist
-	sessionID := ExtractSessionFromContext(ctx)
-
-	// Validate session is still active
-	if sessionID == "" {
-		return mcp.NewToolResultError("No active session found"), nil
-	}
-
-	// Check if session is still connected
-	if !sessionManager.IsSessionActive(sessionID) {
-		return mcp.NewToolResultError("Session is no longer active"), nil
-	}
-
-	// Find which specialty this session is registered for
-	var specialty string
-	for _, agent := range agentQARegistry.ListSpecialists() {
-		if agent.SessionID == sessionID {
-			specialty = agent.Specialty
-			break
-		}
-	}
-
-	if specialty == "" {
-		return mcp.NewToolResultError("No specialist registered for this session"), nil
-	}
-
 	// Get required parameters
 	questionID, err := request.RequireString("question_id")
 	if err != nil {
@@ -113,30 +40,30 @@ func handleAnswerQuestion(ctx context.Context, request mcp.CallToolRequest) (*mc
 
 // handleGetNextQuestion waits for and retrieves the next question for this specialist
 func handleGetNextQuestion(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	// Extract session ID to find specialist
-	sessionID := ExtractSessionFromContext(ctx)
-
-	// Validate session is still active
-	if sessionID == "" {
-		return mcp.NewToolResultError("No active session found"), nil
+	// Get required parameters
+	name, err := request.RequireString("name")
+	if err != nil {
+		return mcp.NewToolResultError("Missing or invalid 'name' argument"), nil
 	}
 
-	// Check if session is still connected
-	if !sessionManager.IsSessionActive(sessionID) {
-		return mcp.NewToolResultError("Session is no longer active"), nil
+	specialty, err := request.RequireString("specialty")
+	if err != nil {
+		return mcp.NewToolResultError("Missing or invalid 'specialty' argument"), nil
 	}
 
-	// Find which specialty this session is registered for
-	var specialty string
-	for _, agent := range agentQARegistry.ListSpecialists() {
-		if agent.SessionID == sessionID {
-			specialty = agent.Specialty
-			break
+	rootDir, err := request.RequireString("root_dir")
+	if err != nil {
+		return mcp.NewToolResultError("Missing or invalid 'root_dir' argument"), nil
+	}
+
+	// Get optional instructions
+	instructions := ""
+	if arguments, ok := request.Params.Arguments.(map[string]any); ok {
+		if inst, exists := arguments["instructions"]; exists {
+			if instStr, ok := inst.(string); ok {
+				instructions = instStr
+			}
 		}
-	}
-
-	if specialty == "" {
-		return mcp.NewToolResultError("No specialist registered for this session"), nil
 	}
 
 	// Get wait parameter (default: true)
@@ -165,7 +92,7 @@ func handleGetNextQuestion(ctx context.Context, request mcp.CallToolRequest) (*m
 	// If not waiting, check if there's a question immediately available
 	if !wait {
 		// Try to get a question without blocking
-		qa, err := agentQARegistry.WaitForQuestionWithContext(ctx, specialty, 1*time.Millisecond)
+		qa, err := agentQARegistry.WaitForQuestionWithContext(ctx, name, specialty, rootDir, instructions, 1*time.Millisecond)
 		if err != nil {
 			return mcp.NewToolResultError("No questions available"), nil
 		}
@@ -181,30 +108,10 @@ func handleGetNextQuestion(ctx context.Context, request mcp.CallToolRequest) (*m
 		return mcp.NewToolResultText(string(resultBytes)), nil
 	}
 
-	// Create a context that respects both the request context and session context
-	waitCtx := ctx
-	if session, exists := sessionManager.GetSession(sessionID); exists && session != nil && session.Context != nil {
-		// Use a context that cancels when either the request context or session context is cancelled
-		var cancel context.CancelFunc
-		waitCtx, cancel = context.WithCancel(ctx)
-		defer cancel()
-
-		go func() {
-			select {
-			case <-session.Context.Done():
-				cancel()
-			case <-ctx.Done():
-				cancel()
-			case <-waitCtx.Done():
-				return
-			}
-		}()
-	}
-
 	// Wait for next question with context cancellation support
-	LogInfo("AgentQA", "Waiting for next question", fmt.Sprintf("Specialty: %s, Timeout: %v", specialty, timeout))
+	LogInfo("AgentQA", "Waiting for next question", fmt.Sprintf("Name: %s, Specialty: %s, RootDir: %s, Timeout: %v", name, specialty, rootDir, timeout))
 
-	qa, err := agentQARegistry.WaitForQuestionWithContext(waitCtx, specialty, timeout)
+	qa, err := agentQARegistry.WaitForQuestionWithContext(ctx, name, specialty, rootDir, instructions, timeout)
 	if err != nil {
 		LogError("AgentQA", "Error waiting for question", fmt.Sprintf("Specialty: %s, Error: %v", specialty, err))
 
@@ -317,20 +224,30 @@ func handleAskSpecialist(ctx context.Context, request mcp.CallToolRequest) (*mcp
 	return mcp.NewToolResultText(string(resultBytes)), nil
 }
 
-// handleListSpecialists lists all active (connected) specialists
+// handleListSpecialists lists all directories with their waiting specialists
 func handleListSpecialists(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	// Only return active specialists (excludes disconnected ones)
-	specialists := agentQARegistry.ListActiveSpecialists()
+	// Get all directories
+	directories := agentQARegistry.ListDirectories()
 
-	result := make([]map[string]any, 0, len(specialists))
-	for _, agent := range specialists {
+	result := make([]map[string]any, 0, len(directories))
+	for _, dir := range directories {
+		// Count pending questions in directory queue
+		pendingCount := 0
+		if qaList := agentQARegistry.GetQAsByDirectory(dir.Key); qaList != nil {
+			for _, qa := range qaList {
+				if qa.Status == QAStatusPending {
+					pendingCount++
+				}
+			}
+		}
+
 		result = append(result, map[string]any{
-			"id":        agent.ID,
-			"name":      agent.Name,
-			"specialty": agent.Specialty,
-			"root_dir":  agent.RootDir,
-			"status":    string(agent.Status),
-			"key":       fmt.Sprintf("%s-%s", agent.RootDir, agent.Specialty),
+			"key":               dir.Key,
+			"root_dir":          dir.RootDir,
+			"specialty":         dir.Specialty,
+			"instruction":       dir.Instruction,
+			"pending_questions": pendingCount,
+			"created_at":        dir.CreatedAt.Format(time.RFC3339),
 		})
 	}
 

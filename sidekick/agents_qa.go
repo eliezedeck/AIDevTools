@@ -24,8 +24,8 @@ const (
 // QuestionAnswer represents a Q&A exchange between agents
 type QuestionAnswer struct {
 	ID             string
-	From           string // Requesting agent
-	To             string // Specialist agent
+	From           string    // Requesting agent
+	To             string    // Specialist agent
 	Question       string
 	Answer         string
 	Error          string
@@ -33,34 +33,34 @@ type QuestionAnswer struct {
 	Timestamp      time.Time
 	ProcessingTime time.Duration
 	ExpiresAt      time.Time // When this Q&A entry expires (6 hours after creation)
+	DirectoryKey   string    // The directory this question belongs to
 }
 
-// SpecialistStatus represents the status of a specialist agent
-type SpecialistStatus string
-
-const (
-	SpecialistAvailable    SpecialistStatus = "available"
-	SpecialistBusy         SpecialistStatus = "busy"
-	SpecialistDisconnected SpecialistStatus = "disconnected"
-	SpecialistOffline      SpecialistStatus = "offline"
-)
 
 // SpecialistAgent represents a registered specialist agent
 type SpecialistAgent struct {
-	ID        string
-	Name      string
-	Specialty string
-	RootDir   string           // Root directory of the project this specialist is specialized in
-	SessionID string           // MCP session ID
-	ProcessID string           // If spawned via sidekick
-	Status    SpecialistStatus // "available", "busy", "disconnected", "offline"
+	ID          string
+	Name        string
+	Specialty   string
+	RootDir     string    // Root directory of the project this specialist is specialized in
+	Instruction string    // Usage guidance for potential questioners
+	LastSeen    time.Time // Track when specialist last called get_next_question
+}
+
+// SpecialistDirectory represents a directory where specialists can answer questions
+type SpecialistDirectory struct {
+	Key         string    // "<root_dir>-<specialty>"
+	RootDir     string    // Project root directory
+	Specialty   string    // Area of expertise
+	Instruction string    // Usage guidance
+	CreatedAt   time.Time // When directory was created
 }
 
 // AgentQARegistry manages Q&A exchanges and specialist registrations
 type AgentQARegistry struct {
-	specialists map[string][]*SpecialistAgent   // key: "<root-dir>-<specialty>", value: list of specialists
+	directories map[string]*SpecialistDirectory // key: "<root-dir>-<specialty>"
 	qaHistory   map[string]*QuestionAnswer      // key: Q&A ID
-	qaQueues    map[string]chan *QuestionAnswer // key: "<root-dir>-<specialty>"
+	qaQueues    map[string]chan *QuestionAnswer // key: "<root-dir>-<specialty>" (directory queues)
 	waiters     map[string]chan *QuestionAnswer // key: Q&A ID, for answer responses
 	mutex       sync.RWMutex
 }
@@ -68,7 +68,7 @@ type AgentQARegistry struct {
 // NewAgentQARegistry creates a new agent Q&A registry
 func NewAgentQARegistry() *AgentQARegistry {
 	r := &AgentQARegistry{
-		specialists: make(map[string][]*SpecialistAgent),
+		directories: make(map[string]*SpecialistDirectory),
 		qaHistory:   make(map[string]*QuestionAnswer),
 		qaQueues:    make(map[string]chan *QuestionAnswer),
 		waiters:     make(map[string]chan *QuestionAnswer),
@@ -78,187 +78,87 @@ func NewAgentQARegistry() *AgentQARegistry {
 	return r
 }
 
-// RegisterSpecialist registers a specialist agent
-func (r *AgentQARegistry) RegisterSpecialist(name, specialty, rootDir, sessionID string) (*SpecialistAgent, error) {
-	r.mutex.Lock()
-	defer r.mutex.Unlock()
 
-	// Create the key as "<root-dir>-<specialty>"
-	key := fmt.Sprintf("%s-%s", rootDir, specialty)
 
-	// Check if there's already an active specialist for this key
-	if existingList, exists := r.specialists[key]; exists {
-		// Check if any existing specialist is still connected
-		for _, existing := range existingList {
-			if existing.Status != SpecialistDisconnected {
-				return nil, fmt.Errorf("specialty '%s' in project '%s' already registered by agent '%s' (status: %s)", specialty, rootDir, existing.Name, existing.Status)
-			}
-		}
-		LogInfo("AgentQA", fmt.Sprintf("Adding new specialist '%s' for '%s' (existing disconnected specialists found)", name, key))
-	}
-
-	agent := &SpecialistAgent{
-		ID:        uuid.New().String(),
-		Name:      name,
-		Specialty: specialty,
-		RootDir:   rootDir,
-		SessionID: sessionID,
-		Status:    SpecialistAvailable,
-	}
-
-	// Add to the list of specialists for this key
-	r.specialists[key] = append(r.specialists[key], agent)
-
-	// Create question queue for this key (or recreate if it was closed)
-	r.qaQueues[key] = make(chan *QuestionAnswer, 100)
-
-	LogInfo("AgentQA", fmt.Sprintf("Registered specialist '%s' (ID: %s) for '%s'", name, agent.ID, key))
-
-	return agent, nil
-}
-
-// UnregisterSpecialist removes a specialist agent by key
-func (r *AgentQARegistry) UnregisterSpecialist(key string) {
-	r.mutex.Lock()
-	defer r.mutex.Unlock()
-
-	if agentList, exists := r.specialists[key]; exists {
-		delete(r.specialists, key)
-
-		// Close the question queue
-		if queue, exists := r.qaQueues[key]; exists {
-			close(queue)
-			delete(r.qaQueues, key)
-		}
-
-		// Log all specialists being unregistered
-		for _, agent := range agentList {
-			LogInfo("AgentQA", fmt.Sprintf("Unregistered specialist '%s' (ID: %s) for '%s'", agent.Name, agent.ID, key))
-		}
-	}
-}
-
-// GetSpecialist returns the first active specialist for a given specialty
-func (r *AgentQARegistry) GetSpecialist(specialty string) *SpecialistAgent {
+// GetDirectoryBySpecialty returns the first directory for a given specialty
+func (r *AgentQARegistry) GetDirectoryBySpecialty(specialty string) *SpecialistDirectory {
 	r.mutex.RLock()
 	defer r.mutex.RUnlock()
 
-	// Look through all keys to find a matching specialty
-	for _, agentList := range r.specialists {
-		for _, agent := range agentList {
-			if agent.Specialty == specialty && agent.Status != SpecialistDisconnected {
-				return agent
-			}
+	// Look through all directories to find a matching specialty
+	for _, dir := range r.directories {
+		if dir.Specialty == specialty {
+			return dir
 		}
 	}
 	return nil
 }
 
-// GetSpecialistByKey returns the first active specialist for a given key
-func (r *AgentQARegistry) GetSpecialistByKey(key string) *SpecialistAgent {
+// GetDirectory returns a directory by key
+func (r *AgentQARegistry) GetDirectory(key string) *SpecialistDirectory {
 	r.mutex.RLock()
 	defer r.mutex.RUnlock()
 
-	if agentList, exists := r.specialists[key]; exists {
-		for _, agent := range agentList {
-			if agent.Status != SpecialistDisconnected {
-				return agent
-			}
-		}
-	}
-	return nil
+	return r.directories[key]
 }
 
-// ListSpecialists returns all registered specialists (including disconnected ones)
-func (r *AgentQARegistry) ListSpecialists() []*SpecialistAgent {
+// ListDirectories returns all directories
+func (r *AgentQARegistry) ListDirectories() []*SpecialistDirectory {
 	r.mutex.RLock()
 	defer r.mutex.RUnlock()
 
-	agents := make([]*SpecialistAgent, 0)
-	for _, agentList := range r.specialists {
-		for _, agent := range agentList {
-			agents = append(agents, agent)
-		}
+	dirs := make([]*SpecialistDirectory, 0)
+	for _, dir := range r.directories {
+		dirs = append(dirs, dir)
 	}
 
-	// Sort by specialty, then by name
-	sort.Slice(agents, func(i, j int) bool {
-		if agents[i].Specialty == agents[j].Specialty {
-			return agents[i].Name < agents[j].Name
+	// Sort by specialty, then by root dir
+	sort.Slice(dirs, func(i, j int) bool {
+		if dirs[i].Specialty == dirs[j].Specialty {
+			return dirs[i].RootDir < dirs[j].RootDir
 		}
-		return agents[i].Specialty < agents[j].Specialty
+		return dirs[i].Specialty < dirs[j].Specialty
 	})
 
-	return agents
+	return dirs
 }
 
-// ListActiveSpecialists returns only connected specialists (excludes disconnected ones)
-func (r *AgentQARegistry) ListActiveSpecialists() []*SpecialistAgent {
-	r.mutex.RLock()
-	defer r.mutex.RUnlock()
 
-	agents := make([]*SpecialistAgent, 0)
-	for _, agentList := range r.specialists {
-		for _, agent := range agentList {
-			// Only include specialists that are not disconnected
-			if agent.Status != SpecialistDisconnected {
-				agents = append(agents, agent)
-			}
-		}
-	}
-
-	// Sort by specialty, then by name
-	sort.Slice(agents, func(i, j int) bool {
-		if agents[i].Specialty == agents[j].Specialty {
-			return agents[i].Name < agents[j].Name
-		}
-		return agents[i].Specialty < agents[j].Specialty
-	})
-
-	return agents
-}
-
-// AskQuestion submits a question to a specialist
+// AskQuestion submits a question to a specialist directory
 func (r *AgentQARegistry) AskQuestion(from, specialty, question string, timeout time.Duration) (*QuestionAnswer, error) {
 	r.mutex.Lock()
 
-	// Find an active specialist for this specialty
-	var specialist *SpecialistAgent
-	var key string
-	for k, agentList := range r.specialists {
-		for _, agent := range agentList {
-			if agent.Specialty == specialty && agent.Status != SpecialistDisconnected {
-				specialist = agent
-				key = k
-				break
-			}
-		}
-		if specialist != nil {
+	// Find a directory for this specialty
+	var selectedDir *SpecialistDirectory
+	for _, dir := range r.directories {
+		if dir.Specialty == specialty {
+			selectedDir = dir
 			break
 		}
 	}
 
-	if specialist == nil {
+	if selectedDir == nil {
 		r.mutex.Unlock()
-		return nil, fmt.Errorf("no active specialist registered for '%s'", specialty)
+		return nil, fmt.Errorf("no directory available for specialty '%s'", specialty)
 	}
 
-	// Get the queue for this key
-	queue, exists := r.qaQueues[key]
+	// Get the directory queue
+	queue, exists := r.qaQueues[selectedDir.Key]
 	if !exists {
 		r.mutex.Unlock()
-		return nil, fmt.Errorf("no queue for specialty '%s'", specialty)
+		return nil, fmt.Errorf("no queue for directory '%s'", selectedDir.Key)
 	}
 
 	// Create Q&A entry
 	qa := &QuestionAnswer{
-		ID:        uuid.New().String(),
-		From:      from,
-		To:        specialist.Name,
-		Question:  question,
-		Status:    QAStatusPending,
-		Timestamp: time.Now(),
-		ExpiresAt: time.Now().Add(6 * time.Hour), // Expires after 6 hours
+		ID:           uuid.New().String(),
+		From:         from,
+		To:           specialty, // Will be updated by the specialist who picks it up
+		Question:     question,
+		Status:       QAStatusPending,
+		Timestamp:    time.Now(),
+		ExpiresAt:    time.Now().Add(6 * time.Hour), // Expires after 6 hours
+		DirectoryKey: selectedDir.Key,
 	}
 
 	// Store in history
@@ -270,29 +170,23 @@ func (r *AgentQARegistry) AskQuestion(from, specialty, question string, timeout 
 
 	r.mutex.Unlock()
 
-	// Send question to specialist's queue with panic recovery
+	// Send question to directory queue with panic recovery
 	func() {
 		defer func() {
 			if rec := recover(); rec != nil {
-				EmergencyLog("AgentQA", "Panic sending question to queue", fmt.Sprintf("Question: %s, Specialist: %s, Panic: %v", qa.ID, specialist.Name, rec))
-				// Mark question as failed due to panic
-				r.mutex.Lock()
-				qa.Status = QAStatusFailed
-				qa.Error = "Failed to send question - specialist disconnected"
-				delete(r.waiters, qa.ID)
-				r.mutex.Unlock()
+				EmergencyLog("AgentQA", "Panic sending question to directory", fmt.Sprintf("Question: %s, Directory: %s, Panic: %v", qa.ID, selectedDir.Key, rec))
 			}
 		}()
 
 		select {
 		case queue <- qa:
 			// Question sent successfully
-			LogInfo("AgentQA", fmt.Sprintf("Question %s sent to specialist '%s'", qa.ID, specialist.Name))
+			LogInfo("AgentQA", fmt.Sprintf("Question %s sent to directory '%s'", qa.ID, selectedDir.Key))
 		default:
-			// Queue is full or closed
+			// Queue is full
 			r.mutex.Lock()
 			qa.Status = QAStatusFailed
-			qa.Error = "Specialist queue is full or specialist disconnected"
+			qa.Error = "Directory queue is full"
 			delete(r.waiters, qa.ID)
 			r.mutex.Unlock()
 		}
@@ -325,12 +219,12 @@ func (r *AgentQARegistry) AskQuestion(from, specialty, question string, timeout 
 }
 
 // WaitForQuestion waits for a question for a specialist (blocking)
-func (r *AgentQARegistry) WaitForQuestion(specialty string, timeout time.Duration) (*QuestionAnswer, error) {
-	return r.WaitForQuestionWithContext(context.Background(), specialty, timeout)
+func (r *AgentQARegistry) WaitForQuestion(name, specialty, rootDir, instructions string, timeout time.Duration) (*QuestionAnswer, error) {
+	return r.WaitForQuestionWithContext(context.Background(), name, specialty, rootDir, instructions, timeout)
 }
 
 // WaitForQuestionWithContext waits for a question for a specialist with context cancellation support
-func (r *AgentQARegistry) WaitForQuestionWithContext(ctx context.Context, specialty string, timeout time.Duration) (*QuestionAnswer, error) {
+func (r *AgentQARegistry) WaitForQuestionWithContext(ctx context.Context, name, specialty, rootDir, instructions string, timeout time.Duration) (*QuestionAnswer, error) {
 	// Add panic recovery for channel operations
 	defer func() {
 		if rec := recover(); rec != nil {
@@ -338,53 +232,62 @@ func (r *AgentQARegistry) WaitForQuestionWithContext(ctx context.Context, specia
 		}
 	}()
 
-	r.mutex.RLock()
+	// Create directory key
+	dirKey := fmt.Sprintf("%s-%s", rootDir, specialty)
 
-	// Find an active specialist for this specialty
-	var specialist *SpecialistAgent
-	var key string
-	for k, agentList := range r.specialists {
-		for _, agent := range agentList {
-			if agent.Specialty == specialty && agent.Status != SpecialistDisconnected {
-				specialist = agent
-				key = k
-				break
-			}
+	r.mutex.Lock()
+
+	// Create or update directory
+	dir := r.directories[dirKey]
+	if dir == nil {
+		// Create new directory
+		dir = &SpecialistDirectory{
+			Key:         dirKey,
+			RootDir:     rootDir,
+			Specialty:   specialty,
+			Instruction: instructions,
+			CreatedAt:   time.Now(),
 		}
-		if specialist != nil {
-			break
+		r.directories[dirKey] = dir
+
+		// Create question queue for this directory
+		r.qaQueues[dirKey] = make(chan *QuestionAnswer, 100)
+
+		LogInfo("AgentQA", fmt.Sprintf("Created new directory '%s' with instructions", dirKey))
+	} else {
+		// Update instructions if provided
+		if instructions != "" {
+			dir.Instruction = instructions
+			LogInfo("AgentQA", fmt.Sprintf("Updated instructions for directory '%s'", dirKey))
 		}
 	}
 
-	if specialist == nil {
-		r.mutex.RUnlock()
-		return nil, fmt.Errorf("specialist not registered for '%s'", specialty)
-	}
-
-	// Get the queue for this key
-	queue, exists := r.qaQueues[key]
+	// Get the queue for this directory
+	queue, exists := r.qaQueues[dirKey]
 	if !exists {
-		r.mutex.RUnlock()
-		return nil, fmt.Errorf("no queue for specialty '%s'", specialty)
+		// This shouldn't happen, but create it if missing
+		queue = make(chan *QuestionAnswer, 100)
+		r.qaQueues[dirKey] = queue
 	}
 
-	// Update specialist status
-	specialist.Status = SpecialistAvailable
-	r.mutex.RUnlock()
+	r.mutex.Unlock()
 
-	// Wait for question with context cancellation support and closed channel handling
+	LogInfo("AgentQA", fmt.Sprintf("Specialist '%s' waiting for questions in directory '%s'", name, dirKey))
+
+	// Wait for question with context cancellation support
 	if timeout == 0 {
 		// No timeout - block until question arrives or context is cancelled
 		select {
 		case qa, ok := <-queue:
 			if !ok {
-				// Channel was closed (specialist disconnected)
-				return nil, fmt.Errorf("specialist queue closed - session disconnected")
+				return nil, fmt.Errorf("directory queue closed")
 			}
 			r.mutex.Lock()
 			qa.Status = QAStatusProcessing
-			specialist.Status = SpecialistBusy
+			// Update the 'To' field with the actual specialist name
+			qa.To = name
 			r.mutex.Unlock()
+			LogInfo("AgentQA", fmt.Sprintf("Question %s assigned to specialist '%s'", qa.ID, name))
 			return qa, nil
 		case <-ctx.Done():
 			return nil, fmt.Errorf("context cancelled: %w", ctx.Err())
@@ -394,13 +297,14 @@ func (r *AgentQARegistry) WaitForQuestionWithContext(ctx context.Context, specia
 		select {
 		case qa, ok := <-queue:
 			if !ok {
-				// Channel was closed (specialist disconnected)
-				return nil, fmt.Errorf("specialist queue closed - session disconnected")
+				return nil, fmt.Errorf("directory queue closed")
 			}
 			r.mutex.Lock()
 			qa.Status = QAStatusProcessing
-			specialist.Status = SpecialistBusy
+			// Update the 'To' field with the actual specialist name
+			qa.To = name
 			r.mutex.Unlock()
+			LogInfo("AgentQA", fmt.Sprintf("Question %s assigned to specialist '%s'", qa.ID, name))
 			return qa, nil
 		case <-time.After(timeout):
 			return nil, fmt.Errorf("timeout waiting for question")
@@ -446,15 +350,7 @@ func (r *AgentQARegistry) AnswerQuestion(questionID, answer string, err error) e
 		qa.Answer = answer
 	}
 
-	// Update specialist status - find the specialist by name
-	for _, agentList := range r.specialists {
-		for _, agent := range agentList {
-			if agent.Name == qa.To {
-				agent.Status = SpecialistAvailable
-				break
-			}
-		}
-	}
+	// No need to update specialist status in the new system
 
 	// Send response to waiting channel
 	if waiter, exists := r.waiters[questionID]; exists {
@@ -499,105 +395,42 @@ func (r *AgentQARegistry) GetAllQAs() []*QuestionAnswer {
 	return qas
 }
 
-// CleanupForSession removes all specialists and Q&As for a given session
-func (r *AgentQARegistry) CleanupForSession(sessionID string) {
-	// Add panic recovery for cleanup operations
-	defer func() {
-		if rec := recover(); rec != nil {
-			EmergencyLog("AgentQA", "Panic in CleanupForSession", fmt.Sprintf("SessionID: %s, Panic: %v", sessionID, rec))
-		}
-	}()
-
-	r.mutex.Lock()
-	defer r.mutex.Unlock()
-
-	// Find and mark specialists as disconnected for this session (keep them in registry)
-	for key, agentList := range r.specialists {
-		for _, agent := range agentList {
-			if agent.SessionID == sessionID {
-				// Mark specialist as disconnected instead of deleting
-				agent.Status = SpecialistDisconnected
-
-				// Safely close the question queue
-				if queue, exists := r.qaQueues[key]; exists {
-					// Close channel safely - any waiting goroutines will receive the closed signal
-					go func(ch chan *QuestionAnswer, k string) {
-						defer func() {
-							if r := recover(); r != nil {
-								EmergencyLog("AgentQA", "Panic closing queue channel", fmt.Sprintf("Key: %s, Panic: %v", k, r))
-							}
-						}()
-						close(ch)
-					}(queue, key)
-					delete(r.qaQueues, key)
-				}
-
-				LogInfo("AgentQA", fmt.Sprintf("Marked specialist '%s' (ID: %s) as disconnected for session %s", agent.Name, agent.ID, sessionID))
-			}
-		}
-	}
-
-	// Mark any pending questions from this session as failed and notify waiters
-	for questionID, qa := range r.qaHistory {
-		if qa.From == fmt.Sprintf("Session %s", sessionID) && qa.Status == QAStatusPending {
-			qa.Status = QAStatusFailed
-			qa.Error = "Session disconnected"
-
-			// Notify any waiters for this question
-			if waiter, exists := r.waiters[questionID]; exists {
-				select {
-				case waiter <- qa:
-					// Successfully notified waiter
-				default:
-					// Waiter channel is full or closed, ignore
-				}
-				delete(r.waiters, questionID)
-			}
-		}
-	}
-}
 
 // AskQuestionAsync submits a question to a specialist and returns immediately with question ID
 func (r *AgentQARegistry) AskQuestionAsync(from, specialty, question string) (*QuestionAnswer, error) {
 	r.mutex.Lock()
 
-	// Find an active specialist for this specialty
-	var specialist *SpecialistAgent
-	var key string
-	for k, agentList := range r.specialists {
-		for _, agent := range agentList {
-			if agent.Specialty == specialty && agent.Status != SpecialistDisconnected {
-				specialist = agent
-				key = k
-				break
-			}
-		}
-		if specialist != nil {
+	// Find a directory for this specialty
+	var selectedDir *SpecialistDirectory
+	for _, dir := range r.directories {
+		if dir.Specialty == specialty {
+			selectedDir = dir
 			break
 		}
 	}
 
-	if specialist == nil {
+	if selectedDir == nil {
 		r.mutex.Unlock()
-		return nil, fmt.Errorf("no active specialist registered for '%s'", specialty)
+		return nil, fmt.Errorf("no directory available for specialty '%s'", specialty)
 	}
 
-	// Get the queue for this key
-	queue, exists := r.qaQueues[key]
+	// Get the directory queue
+	queue, exists := r.qaQueues[selectedDir.Key]
 	if !exists {
 		r.mutex.Unlock()
-		return nil, fmt.Errorf("no queue for specialty '%s'", specialty)
+		return nil, fmt.Errorf("no queue for directory '%s'", selectedDir.Key)
 	}
 
 	// Create Q&A entry
 	qa := &QuestionAnswer{
-		ID:        uuid.New().String(),
-		From:      from,
-		To:        specialist.Name,
-		Question:  question,
-		Status:    QAStatusPending,
-		Timestamp: time.Now(),
-		ExpiresAt: time.Now().Add(6 * time.Hour), // Expires after 6 hours
+		ID:           uuid.New().String(),
+		From:         from,
+		To:           specialty, // Will be updated by the specialist who picks it up
+		Question:     question,
+		Status:       QAStatusPending,
+		Timestamp:    time.Now(),
+		ExpiresAt:    time.Now().Add(6 * time.Hour), // Expires after 6 hours
+		DirectoryKey: selectedDir.Key,
 	}
 
 	// Store in history
@@ -609,29 +442,23 @@ func (r *AgentQARegistry) AskQuestionAsync(from, specialty, question string) (*Q
 
 	r.mutex.Unlock()
 
-	// Send question to specialist's queue with panic recovery
+	// Send question to directory queue with panic recovery
 	func() {
 		defer func() {
 			if rec := recover(); rec != nil {
-				EmergencyLog("AgentQA", "Panic sending async question to queue", fmt.Sprintf("Question: %s, Specialist: %s, Panic: %v", qa.ID, specialist.Name, rec))
-				// Mark question as failed due to panic
-				r.mutex.Lock()
-				qa.Status = QAStatusFailed
-				qa.Error = "Failed to send question - specialist disconnected"
-				delete(r.waiters, qa.ID)
-				r.mutex.Unlock()
+				EmergencyLog("AgentQA", "Panic sending async question to directory", fmt.Sprintf("Question: %s, Directory: %s, Panic: %v", qa.ID, selectedDir.Key, rec))
 			}
 		}()
 
 		select {
 		case queue <- qa:
 			// Question sent successfully
-			LogInfo("AgentQA", fmt.Sprintf("Question %s sent to specialist '%s'", qa.ID, specialist.Name))
+			LogInfo("AgentQA", fmt.Sprintf("Async question %s sent to directory '%s'", qa.ID, selectedDir.Key))
 		default:
-			// Queue is full or closed
+			// Queue is full
 			r.mutex.Lock()
 			qa.Status = QAStatusFailed
-			qa.Error = "Specialist queue is full or specialist disconnected"
+			qa.Error = "Directory queue is full"
 			delete(r.waiters, qa.ID)
 			r.mutex.Unlock()
 		}
@@ -713,6 +540,7 @@ func (r *AgentQARegistry) GetAnswer(questionID string, timeout time.Duration) (*
 	}
 }
 
+
 // startCleanupRoutine starts a goroutine that periodically cleans up expired Q&A entries
 func (r *AgentQARegistry) startCleanupRoutine() {
 	go func() {
@@ -767,28 +595,21 @@ func (r *AgentQARegistry) cleanupExpiredEntries() {
 	}
 }
 
-// GetQAsBySpecialty returns all Q&A entries for a specific specialty, sorted by timestamp (newest first)
-func (r *AgentQARegistry) GetQAsBySpecialty(specialty string) []*QuestionAnswer {
+// GetQAsByDirectory returns all Q&A entries for a specific directory, sorted by timestamp (newest first)
+func (r *AgentQARegistry) GetQAsByDirectory(key string) []*QuestionAnswer {
 	r.mutex.RLock()
 	defer r.mutex.RUnlock()
 
-	// Collect all specialist names for this specialty
-	specialistNames := make(map[string]bool)
-	for _, agentList := range r.specialists {
-		for _, agent := range agentList {
-			if agent.Specialty == specialty {
-				specialistNames[agent.Name] = true
-			}
-		}
-	}
-
-	if len(specialistNames) == 0 {
+	// Get directory to check it exists
+	dir := r.directories[key]
+	if dir == nil {
 		return []*QuestionAnswer{}
 	}
 
+	// Find all Q&As that belong to this directory
 	qas := make([]*QuestionAnswer, 0)
 	for _, qa := range r.qaHistory {
-		if specialistNames[qa.To] {
+		if qa.DirectoryKey == key {
 			qas = append(qas, qa)
 		}
 	}

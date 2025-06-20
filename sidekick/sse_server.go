@@ -105,8 +105,7 @@ func handleSessionClosed(sessionID string) {
 	// Mark session as disconnected (but keep it in memory)
 	sessionManager.MarkSessionDisconnected(sessionID)
 
-	// Clean up any specialists registered by this session
-	agentQARegistry.CleanupForSession(sessionID)
+	// No need to clean up specialists in the new directory-based system
 
 	// Kill all processes associated with this session
 	killedCount := registry.killProcessesBySession(sessionID)

@@ -318,22 +318,6 @@ func main() {
 	s.AddTool(getProcessStatusTool, handleGetProcessStatus)
 
 	// 🤝 Define agent communication tools
-	registerSpecialistTool := mcp.NewTool(
-		"register_specialist",
-		mcp.WithDescription("Register as a specialist agent that can answer questions"),
-		mcp.WithString("name",
-			mcp.Required(),
-			mcp.Description("Agent name"),
-		),
-		mcp.WithString("specialty",
-			mcp.Required(),
-			mcp.Description("Specialty area (e.g., 'codebase', 'testing', 'security')"),
-		),
-		mcp.WithString("root_dir",
-			mcp.Required(),
-			mcp.Description("Root directory of the project the specialist is specialized in"),
-		),
-	)
 
 	answerQuestionTool := mcp.NewTool(
 		"answer_question",
@@ -350,7 +334,22 @@ func main() {
 
 	getNextQuestionTool := mcp.NewTool(
 		"get_next_question",
-		mcp.WithDescription("Wait for and retrieve the next question for this specialist. Blocks if no questions are available."),
+		mcp.WithDescription("Wait for and retrieve the next question for this specialist. Creates or joins a directory for the specified specialty. Blocks if no questions are available."),
+		mcp.WithString("name",
+			mcp.Required(),
+			mcp.Description("Agent name"),
+		),
+		mcp.WithString("specialty",
+			mcp.Required(),
+			mcp.Description("Specialty area (e.g., 'codebase', 'testing', 'security', 'flutter', 'convex', 'firebase-backend')"),
+		),
+		mcp.WithString("root_dir",
+			mcp.Required(),
+			mcp.Description("Root directory of the project"),
+		),
+		mcp.WithString("instructions",
+			mcp.Description("Usage instructions for potential questioners (optional)"),
+		),
 		mcp.WithBoolean("wait",
 			mcp.Description("Whether to wait for a question (default: true)"),
 		),
@@ -396,7 +395,6 @@ func main() {
 	)
 
 	// 🔗 Register agent communication tools
-	s.AddTool(registerSpecialistTool, handleRegisterSpecialist)
 	s.AddTool(answerQuestionTool, handleAnswerQuestion)
 	s.AddTool(getNextQuestionTool, handleGetNextQuestion)
 	s.AddTool(askSpecialistTool, handleAskSpecialist)
