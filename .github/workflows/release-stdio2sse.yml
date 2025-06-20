@@ -36,10 +36,14 @@ jobs:
       id: version
       run: |
         if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-          echo "version=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
+          FULL_VERSION="${{ github.event.inputs.tag }}"
         else
-          echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          FULL_VERSION="${GITHUB_REF#refs/tags/}"
         fi
+        echo "version=$FULL_VERSION" >> $GITHUB_OUTPUT
+        # Extract just the version number (e.g., "v0.1.6" from "stdio2sse-v0.1.6")
+        VERSION_NUMBER="${FULL_VERSION#stdio2sse-}"
+        echo "version_number=$VERSION_NUMBER" >> $GITHUB_OUTPUT
 
     - name: Cache Go modules
       uses: actions/cache@v4
@@ -122,7 +126,35 @@ jobs:
           PREV_TAG=$(git tag -l "stdio2sse-v*" | sort -V | tail -n2 | head -n1)
           if [ -n "$PREV_TAG" ]; then
             echo "changelog<<EOF" >> $GITHUB_OUTPUT
-            git log --pretty=format:"- %s (%h)" $PREV_TAG..HEAD -- stdio2sse/ >> $GITHUB_OUTPUT
+
+            # Get commits that touched stdio2sse files
+            {
+              git log --pretty=format:"%H|%s" $PREV_TAG..HEAD -- stdio2sse/
+              echo ""  # Ensure last line ends with newline
+            } | while IFS='|' read -r hash subject; do
+              # Skip empty lines
+              [ -z "$hash" ] && continue
+
+              # Get only stdio2sse files changed in this commit
+              stdio2sse_files=$(git show --name-only --pretty=format: "$hash" | grep "^stdio2sse/" | sed 's|^stdio2sse/||' | paste -sd ',' -)
+              # Check if this commit also touched sidekick files
+              sidekick_files=$(git show --name-only --pretty=format: "$hash" | grep "^sidekick/" | wc -l)
+
+              if [ -n "$stdio2sse_files" ] && [ "$stdio2sse_files" != "" ]; then
+                if [ "$sidekick_files" -gt 0 ]; then
+                  echo "- $subject (\`$stdio2sse_files\`) [also affects sidekick] (${hash:0:7})"
+                else
+                  echo "- $subject (\`$stdio2sse_files\`) (${hash:0:7})"
+                fi
+              else
+                if [ "$sidekick_files" -gt 0 ]; then
+                  echo "- $subject [also affects sidekick] (${hash:0:7})"
+                else
+                  echo "- $subject (${hash:0:7})"
+                fi
+              fi
+            done >> $GITHUB_OUTPUT
+
             echo "" >> $GITHUB_OUTPUT
             echo "EOF" >> $GITHUB_OUTPUT
           else
@@ -136,7 +168,7 @@ jobs:
       uses: softprops/action-gh-release@v1
       with:
         tag_name: ${{ steps.version.outputs.version }}
-        name: stdio2sse ${{ steps.version.outputs.version }}
+        name: stdio2sse ${{ steps.version.outputs.version_number }}
         body: |
           ## stdio2sse Changes
           ${{ steps.changelog.outputs.changelog }}
