@@ -24,8 +24,8 @@ const (
 // QuestionAnswer represents a Q&A exchange between agents
 type QuestionAnswer struct {
 	ID             string
-	From           string    // Requesting agent
-	To             string    // Specialist agent
+	From           string // Requesting agent
+	To             string // Specialist agent
 	Question       string
 	Answer         string
 	Error          string
@@ -35,7 +35,6 @@ type QuestionAnswer struct {
 	ExpiresAt      time.Time // When this Q&A entry expires (6 hours after creation)
 	DirectoryKey   string    // The directory this question belongs to
 }
-
 
 // SpecialistAgent represents a registered specialist agent
 type SpecialistAgent struct {
@@ -77,8 +76,6 @@ func NewAgentQARegistry() *AgentQARegistry {
 	r.startCleanupRoutine()
 	return r
 }
-
-
 
 // GetDirectoryBySpecialty returns the first directory for a given specialty
 func (r *AgentQARegistry) GetDirectoryBySpecialty(specialty string) *SpecialistDirectory {
@@ -123,23 +120,17 @@ func (r *AgentQARegistry) ListDirectories() []*SpecialistDirectory {
 	return dirs
 }
 
-
 // AskQuestion submits a question to a specialist directory
-func (r *AgentQARegistry) AskQuestion(from, specialty, question string, timeout time.Duration) (*QuestionAnswer, error) {
+func (r *AgentQARegistry) AskQuestion(from, specialty, rootDir, question string, timeout time.Duration) (*QuestionAnswer, error) {
 	r.mutex.Lock()
 
-	// Find a directory for this specialty
-	var selectedDir *SpecialistDirectory
-	for _, dir := range r.directories {
-		if dir.Specialty == specialty {
-			selectedDir = dir
-			break
-		}
-	}
+	// Create directory key to find the specific directory
+	dirKey := fmt.Sprintf("%s-%s", rootDir, specialty)
+	selectedDir := r.directories[dirKey]
 
 	if selectedDir == nil {
 		r.mutex.Unlock()
-		return nil, fmt.Errorf("no directory available for specialty '%s'", specialty)
+		return nil, fmt.Errorf("no directory available for specialty '%s' in root directory '%s'", specialty, rootDir)
 	}
 
 	// Get the directory queue
@@ -395,23 +386,17 @@ func (r *AgentQARegistry) GetAllQAs() []*QuestionAnswer {
 	return qas
 }
 
-
 // AskQuestionAsync submits a question to a specialist and returns immediately with question ID
-func (r *AgentQARegistry) AskQuestionAsync(from, specialty, question string) (*QuestionAnswer, error) {
+func (r *AgentQARegistry) AskQuestionAsync(from, specialty, rootDir, question string) (*QuestionAnswer, error) {
 	r.mutex.Lock()
 
-	// Find a directory for this specialty
-	var selectedDir *SpecialistDirectory
-	for _, dir := range r.directories {
-		if dir.Specialty == specialty {
-			selectedDir = dir
-			break
-		}
-	}
+	// Create directory key to find the specific directory
+	dirKey := fmt.Sprintf("%s-%s", rootDir, specialty)
+	selectedDir := r.directories[dirKey]
 
 	if selectedDir == nil {
 		r.mutex.Unlock()
-		return nil, fmt.Errorf("no directory available for specialty '%s'", specialty)
+		return nil, fmt.Errorf("no directory available for specialty '%s' in root directory '%s'", specialty, rootDir)
 	}
 
 	// Get the directory queue
@@ -539,7 +524,6 @@ func (r *AgentQARegistry) GetAnswer(questionID string, timeout time.Duration) (*
 		}
 	}
 }
-
 
 // startCleanupRoutine starts a goroutine that periodically cleans up expired Q&A entries
 func (r *AgentQARegistry) startCleanupRoutine() {

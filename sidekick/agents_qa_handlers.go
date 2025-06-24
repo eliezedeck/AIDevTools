@@ -9,7 +9,6 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
-
 // handleAnswerQuestion provides an answer to a question. A question can only be answered once and only once.
 func handleAnswerQuestion(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	// Get required parameters
@@ -149,6 +148,11 @@ func handleAskSpecialist(ctx context.Context, request mcp.CallToolRequest) (*mcp
 		return mcp.NewToolResultError("Missing or invalid 'specialty' argument"), nil
 	}
 
+	rootDir, err := request.RequireString("root_dir")
+	if err != nil {
+		return mcp.NewToolResultError("Missing or invalid 'root_dir' argument"), nil
+	}
+
 	question, err := request.RequireString("question")
 	if err != nil {
 		return mcp.NewToolResultError("Missing or invalid 'question' argument"), nil
@@ -189,10 +193,10 @@ func handleAskSpecialist(ctx context.Context, request mcp.CallToolRequest) (*mcp
 
 	if !wait {
 		// Non-blocking mode: submit question and return immediately
-		qa, err2 = agentQARegistry.AskQuestionAsync(from, specialty, question)
+		qa, err2 = agentQARegistry.AskQuestionAsync(from, specialty, rootDir, question)
 	} else {
 		// Blocking mode: wait for answer
-		qa, err2 = agentQARegistry.AskQuestion(from, specialty, question, timeout)
+		qa, err2 = agentQARegistry.AskQuestion(from, specialty, rootDir, question, timeout)
 	}
 
 	if err2 != nil {
