@@ -55,25 +55,40 @@ type SpecialistDirectory struct {
 	CreatedAt   time.Time // When directory was created
 }
 
+// ActiveWaiter tracks an active specialist waiting for questions
+type ActiveWaiter struct {
+	Name       string
+	Context    context.Context
+	Cancel     context.CancelFunc
+	LastSeen   time.Time
+	ChannelGen int64 // Generation number for channel recreation detection
+}
+
 // AgentQARegistry manages Q&A exchanges and specialist registrations
 type AgentQARegistry struct {
-	directories map[string]*SpecialistDirectory // key: "<root-dir>-<specialty>"
-	qaHistory   map[string]*QuestionAnswer      // key: Q&A ID
-	qaQueues    map[string]chan *QuestionAnswer // key: "<root-dir>-<specialty>" (directory queues)
-	waiters     map[string]chan *QuestionAnswer // key: Q&A ID, for answer responses
-	mutex       sync.RWMutex
+	directories   map[string]*SpecialistDirectory // key: "<root-dir>-<specialty>"
+	qaHistory     map[string]*QuestionAnswer      // key: Q&A ID
+	qaQueues      map[string]chan *QuestionAnswer // key: "<root-dir>-<specialty>" (directory queues)
+	waiters       map[string]chan *QuestionAnswer // key: Q&A ID, for answer responses
+	activeWaiters map[string]*ActiveWaiter        // key: "<root-dir>-<specialty>", tracks active specialists
+	mutex         sync.RWMutex
 }
 
 // NewAgentQARegistry creates a new agent Q&A registry
 func NewAgentQARegistry() *AgentQARegistry {
 	r := &AgentQARegistry{
-		directories: make(map[string]*SpecialistDirectory),
-		qaHistory:   make(map[string]*QuestionAnswer),
-		qaQueues:    make(map[string]chan *QuestionAnswer),
-		waiters:     make(map[string]chan *QuestionAnswer),
+		directories:   make(map[string]*SpecialistDirectory),
+		qaHistory:     make(map[string]*QuestionAnswer),
+		qaQueues:      make(map[string]chan *QuestionAnswer),
+		waiters:       make(map[string]chan *QuestionAnswer),
+		activeWaiters: make(map[string]*ActiveWaiter),
 	}
 	// Start cleanup routine for expired Q&A entries
 	r.startCleanupRoutine()
+	// Start waiter cleanup routine for orphaned specialists
+	r.startWaiterCleanupRoutine()
+	// Start health monitoring routine
+	r.startHealthMonitoringRoutine()
 	return r
 }
 
@@ -133,6 +148,28 @@ func (r *AgentQARegistry) AskQuestion(from, specialty, rootDir, question string,
 		return nil, fmt.Errorf("no directory available for specialty '%s' in root directory '%s'", specialty, rootDir)
 	}
 
+	// Check if there's an active waiter for this directory
+	activeWaiter, hasActiveWaiter := r.activeWaiters[dirKey]
+	if !hasActiveWaiter {
+		r.mutex.Unlock()
+		return nil, fmt.Errorf("no active specialist waiting for questions in directory '%s'", dirKey)
+	}
+
+	// Check if the active waiter's context is still valid
+	select {
+	case <-activeWaiter.Context.Done():
+		// Active waiter's context is cancelled, clean it up
+		LogInfo("AgentQA", fmt.Sprintf("Active waiter context cancelled for directory '%s', cleaning up", dirKey))
+		if activeWaiter.Cancel != nil {
+			activeWaiter.Cancel()
+		}
+		delete(r.activeWaiters, dirKey)
+		r.mutex.Unlock()
+		return nil, fmt.Errorf("active specialist context cancelled for directory '%s'", dirKey)
+	default:
+		// Active waiter is still valid
+	}
+
 	// Get the directory queue
 	queue, exists := r.qaQueues[selectedDir.Key]
 	if !exists {
@@ -172,7 +209,7 @@ func (r *AgentQARegistry) AskQuestion(from, specialty, rootDir, question string,
 		select {
 		case queue <- qa:
 			// Question sent successfully
-			LogInfo("AgentQA", fmt.Sprintf("Question %s sent to directory '%s'", qa.ID, selectedDir.Key))
+			LogInfo("AgentQA", fmt.Sprintf("Question %s sent to directory '%s' (active waiter: %s)", qa.ID, selectedDir.Key, activeWaiter.Name))
 		default:
 			// Queue is full
 			r.mutex.Lock()
@@ -180,6 +217,7 @@ func (r *AgentQARegistry) AskQuestion(from, specialty, rootDir, question string,
 			qa.Error = "Directory queue is full"
 			delete(r.waiters, qa.ID)
 			r.mutex.Unlock()
+			LogError("AgentQA", "Directory queue is full", fmt.Sprintf("Question: %s, Directory: %s", qa.ID, selectedDir.Key))
 		}
 	}()
 
@@ -228,6 +266,28 @@ func (r *AgentQARegistry) WaitForQuestionWithContext(ctx context.Context, name, 
 
 	r.mutex.Lock()
 
+	// Check if there's an existing active waiter that needs cleanup
+	if existingWaiter, exists := r.activeWaiters[dirKey]; exists {
+		// Check if the existing waiter's context is cancelled or expired
+		select {
+		case <-existingWaiter.Context.Done():
+			// Previous waiter's context is cancelled, clean it up
+			LogInfo("AgentQA", fmt.Sprintf("Cleaning up cancelled waiter for directory '%s'", dirKey))
+			if existingWaiter.Cancel != nil {
+				existingWaiter.Cancel()
+			}
+			delete(r.activeWaiters, dirKey)
+
+			// Recreate the channel to ensure fresh state
+			r.qaQueues[dirKey] = make(chan *QuestionAnswer, 100)
+			LogInfo("AgentQA", fmt.Sprintf("Recreated channel for directory '%s' after context cancellation", dirKey))
+		default:
+			// Previous waiter is still active
+			r.mutex.Unlock()
+			return nil, fmt.Errorf("another specialist is already waiting for questions in directory '%s'", dirKey)
+		}
+	}
+
 	// Create or update directory
 	dir := r.directories[dirKey]
 	if dir == nil {
@@ -253,15 +313,39 @@ func (r *AgentQARegistry) WaitForQuestionWithContext(ctx context.Context, name, 
 		}
 	}
 
-	// Get the queue for this directory
+	// Ensure queue exists and is fresh
 	queue, exists := r.qaQueues[dirKey]
 	if !exists {
-		// This shouldn't happen, but create it if missing
+		// Create new queue
 		queue = make(chan *QuestionAnswer, 100)
 		r.qaQueues[dirKey] = queue
+		LogInfo("AgentQA", fmt.Sprintf("Created new queue for directory '%s'", dirKey))
+	}
+
+	// Create a child context for this specific waiter
+	waiterCtx, waiterCancel := context.WithCancel(ctx)
+
+	// Register this specialist as an active waiter
+	r.activeWaiters[dirKey] = &ActiveWaiter{
+		Name:       name,
+		Context:    waiterCtx,
+		Cancel:     waiterCancel,
+		LastSeen:   time.Now(),
+		ChannelGen: time.Now().UnixNano(), // Use timestamp as generation
 	}
 
 	r.mutex.Unlock()
+
+	// Cleanup function to remove active waiter when done
+	defer func() {
+		r.mutex.Lock()
+		if waiter, exists := r.activeWaiters[dirKey]; exists && waiter.Name == name {
+			delete(r.activeWaiters, dirKey)
+			LogInfo("AgentQA", fmt.Sprintf("Removed active waiter '%s' from directory '%s'", name, dirKey))
+		}
+		r.mutex.Unlock()
+		waiterCancel()
+	}()
 
 	LogInfo("AgentQA", fmt.Sprintf("Specialist '%s' waiting for questions in directory '%s'", name, dirKey))
 
@@ -277,11 +361,16 @@ func (r *AgentQARegistry) WaitForQuestionWithContext(ctx context.Context, name, 
 			qa.Status = QAStatusProcessing
 			// Update the 'To' field with the actual specialist name
 			qa.To = name
+			// Update last seen time
+			if waiter, exists := r.activeWaiters[dirKey]; exists && waiter.Name == name {
+				waiter.LastSeen = time.Now()
+			}
 			r.mutex.Unlock()
 			LogInfo("AgentQA", fmt.Sprintf("Question %s assigned to specialist '%s'", qa.ID, name))
 			return qa, nil
-		case <-ctx.Done():
-			return nil, fmt.Errorf("context cancelled: %w", ctx.Err())
+		case <-waiterCtx.Done():
+			LogInfo("AgentQA", fmt.Sprintf("Specialist '%s' context cancelled in directory '%s'", name, dirKey))
+			return nil, fmt.Errorf("context cancelled: %w", waiterCtx.Err())
 		}
 	} else {
 		// With timeout and context cancellation
@@ -294,13 +383,19 @@ func (r *AgentQARegistry) WaitForQuestionWithContext(ctx context.Context, name, 
 			qa.Status = QAStatusProcessing
 			// Update the 'To' field with the actual specialist name
 			qa.To = name
+			// Update last seen time
+			if waiter, exists := r.activeWaiters[dirKey]; exists && waiter.Name == name {
+				waiter.LastSeen = time.Now()
+			}
 			r.mutex.Unlock()
 			LogInfo("AgentQA", fmt.Sprintf("Question %s assigned to specialist '%s'", qa.ID, name))
 			return qa, nil
 		case <-time.After(timeout):
+			LogInfo("AgentQA", fmt.Sprintf("Specialist '%s' timed out waiting in directory '%s'", name, dirKey))
 			return nil, fmt.Errorf("timeout waiting for question")
-		case <-ctx.Done():
-			return nil, fmt.Errorf("context cancelled: %w", ctx.Err())
+		case <-waiterCtx.Done():
+			LogInfo("AgentQA", fmt.Sprintf("Specialist '%s' context cancelled in directory '%s'", name, dirKey))
+			return nil, fmt.Errorf("context cancelled: %w", waiterCtx.Err())
 		}
 	}
 }
@@ -399,6 +494,28 @@ func (r *AgentQARegistry) AskQuestionAsync(from, specialty, rootDir, question st
 		return nil, fmt.Errorf("no directory available for specialty '%s' in root directory '%s'", specialty, rootDir)
 	}
 
+	// Check if there's an active waiter for this directory
+	activeWaiter, hasActiveWaiter := r.activeWaiters[dirKey]
+	if !hasActiveWaiter {
+		r.mutex.Unlock()
+		return nil, fmt.Errorf("no active specialist waiting for questions in directory '%s'", dirKey)
+	}
+
+	// Check if the active waiter's context is still valid
+	select {
+	case <-activeWaiter.Context.Done():
+		// Active waiter's context is cancelled, clean it up
+		LogInfo("AgentQA", fmt.Sprintf("Active waiter context cancelled for directory '%s', cleaning up", dirKey))
+		if activeWaiter.Cancel != nil {
+			activeWaiter.Cancel()
+		}
+		delete(r.activeWaiters, dirKey)
+		r.mutex.Unlock()
+		return nil, fmt.Errorf("active specialist context cancelled for directory '%s'", dirKey)
+	default:
+		// Active waiter is still valid
+	}
+
 	// Get the directory queue
 	queue, exists := r.qaQueues[selectedDir.Key]
 	if !exists {
@@ -438,7 +555,7 @@ func (r *AgentQARegistry) AskQuestionAsync(from, specialty, rootDir, question st
 		select {
 		case queue <- qa:
 			// Question sent successfully
-			LogInfo("AgentQA", fmt.Sprintf("Async question %s sent to directory '%s'", qa.ID, selectedDir.Key))
+			LogInfo("AgentQA", fmt.Sprintf("Async question %s sent to directory '%s' (active waiter: %s)", qa.ID, selectedDir.Key, activeWaiter.Name))
 		default:
 			// Queue is full
 			r.mutex.Lock()
@@ -446,6 +563,7 @@ func (r *AgentQARegistry) AskQuestionAsync(from, specialty, rootDir, question st
 			qa.Error = "Directory queue is full"
 			delete(r.waiters, qa.ID)
 			r.mutex.Unlock()
+			LogError("AgentQA", "Directory queue is full", fmt.Sprintf("Async question: %s, Directory: %s", qa.ID, selectedDir.Key))
 		}
 	}()
 
@@ -604,6 +722,207 @@ func (r *AgentQARegistry) GetQAsByDirectory(key string) []*QuestionAnswer {
 	})
 
 	return qas
+}
+
+// GetSystemHealth returns diagnostic information about the Q&A system
+func (r *AgentQARegistry) GetSystemHealth() map[string]any {
+	r.mutex.RLock()
+	defer r.mutex.RUnlock()
+
+	health := map[string]any{
+		"directories_count":    len(r.directories),
+		"qa_history_count":     len(r.qaHistory),
+		"qa_queues_count":      len(r.qaQueues),
+		"waiters_count":        len(r.waiters),
+		"active_waiters_count": len(r.activeWaiters),
+		"directories":          make([]map[string]any, 0),
+		"active_waiters":       make([]map[string]any, 0),
+	}
+
+	// Add directory details
+	for key, dir := range r.directories {
+		dirInfo := map[string]any{
+			"key":        key,
+			"root_dir":   dir.RootDir,
+			"specialty":  dir.Specialty,
+			"created_at": dir.CreatedAt.Format(time.RFC3339),
+			"has_queue":  false,
+			"has_waiter": false,
+		}
+
+		// Check if queue exists
+		if _, exists := r.qaQueues[key]; exists {
+			dirInfo["has_queue"] = true
+		}
+
+		// Check if active waiter exists
+		if waiter, exists := r.activeWaiters[key]; exists {
+			dirInfo["has_waiter"] = true
+			dirInfo["waiter_name"] = waiter.Name
+			dirInfo["waiter_last_seen"] = waiter.LastSeen.Format(time.RFC3339)
+
+			// Check if waiter context is still valid
+			select {
+			case <-waiter.Context.Done():
+				dirInfo["waiter_context_cancelled"] = true
+			default:
+				dirInfo["waiter_context_cancelled"] = false
+			}
+		}
+
+		health["directories"] = append(health["directories"].([]map[string]any), dirInfo)
+	}
+
+	// Add active waiter details
+	for key, waiter := range r.activeWaiters {
+		waiterInfo := map[string]any{
+			"directory_key": key,
+			"name":          waiter.Name,
+			"last_seen":     waiter.LastSeen.Format(time.RFC3339),
+			"channel_gen":   waiter.ChannelGen,
+		}
+
+		// Check if waiter context is still valid
+		select {
+		case <-waiter.Context.Done():
+			waiterInfo["context_cancelled"] = true
+		default:
+			waiterInfo["context_cancelled"] = false
+		}
+
+		health["active_waiters"] = append(health["active_waiters"].([]map[string]any), waiterInfo)
+	}
+
+	return health
+}
+
+// startWaiterCleanupRoutine starts a goroutine that periodically cleans up expired active waiters
+func (r *AgentQARegistry) startWaiterCleanupRoutine() {
+	go func() {
+		ticker := time.NewTicker(1 * time.Hour) // Run cleanup every hour
+		defer ticker.Stop()
+
+		for range ticker.C {
+			r.cleanupExpiredWaiters()
+		}
+	}()
+}
+
+// cleanupExpiredWaiters removes expired active waiters
+func (r *AgentQARegistry) cleanupExpiredWaiters() {
+	// Add panic recovery for cleanup operations
+	defer func() {
+		if rec := recover(); rec != nil {
+			EmergencyLog("AgentQA", "Panic in cleanupExpiredWaiters", fmt.Sprintf("Panic: %v", rec))
+		}
+	}()
+
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
+
+	now := time.Now()
+	expiredCount := 0
+	cancelledCount := 0
+
+	for id, waiter := range r.activeWaiters {
+		shouldRemove := false
+		reason := ""
+
+		// Check if waiter is too old (not seen for 1 hour)
+		if now.Sub(waiter.LastSeen) > 1*time.Hour {
+			shouldRemove = true
+			reason = "expired (not seen for 1 hour)"
+			expiredCount++
+		} else {
+			// Check if waiter context is cancelled
+			select {
+			case <-waiter.Context.Done():
+				shouldRemove = true
+				reason = "context cancelled"
+				cancelledCount++
+			default:
+				// Waiter is still active
+			}
+		}
+
+		if shouldRemove {
+			LogInfo("AgentQA", fmt.Sprintf("Cleaning up waiter '%s' in directory '%s': %s", waiter.Name, id, reason))
+
+			// Clean up waiter channel if exists
+			if waiter.Cancel != nil {
+				waiter.Cancel()
+			}
+
+			// Remove from active waiters
+			delete(r.activeWaiters, id)
+		}
+	}
+
+	if expiredCount > 0 || cancelledCount > 0 {
+		LogInfo("AgentQA", fmt.Sprintf("Cleaned up %d expired and %d cancelled active waiters", expiredCount, cancelledCount))
+	}
+}
+
+// startHealthMonitoringRoutine starts a goroutine that periodically monitors system health
+func (r *AgentQARegistry) startHealthMonitoringRoutine() {
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute) // Check health every 5 minutes
+		defer ticker.Stop()
+
+		for range ticker.C {
+			r.checkSystemHealth()
+		}
+	}()
+}
+
+// checkSystemHealth performs health checks and logs warnings for problematic states
+func (r *AgentQARegistry) checkSystemHealth() {
+	defer func() {
+		if rec := recover(); rec != nil {
+			EmergencyLog("AgentQA", "Panic in checkSystemHealth", fmt.Sprintf("Panic: %v", rec))
+		}
+	}()
+
+	r.mutex.RLock()
+	defer r.mutex.RUnlock()
+
+	// Check for directories without active waiters but with pending questions
+	for dirKey, dir := range r.directories {
+		_, hasActiveWaiter := r.activeWaiters[dirKey]
+
+		// Count pending questions
+		pendingCount := 0
+		for _, qa := range r.qaHistory {
+			if qa.DirectoryKey == dirKey && qa.Status == QAStatusPending {
+				pendingCount++
+			}
+		}
+
+		if !hasActiveWaiter && pendingCount > 0 {
+			LogWarn("AgentQA", "Health Issue: Directory has pending questions but no active waiter",
+				fmt.Sprintf("Directory: %s, Pending: %d, Specialty: %s", dirKey, pendingCount, dir.Specialty))
+		}
+	}
+
+	// Check for active waiters with cancelled contexts
+	cancelledWaiters := 0
+	for dirKey, waiter := range r.activeWaiters {
+		select {
+		case <-waiter.Context.Done():
+			cancelledWaiters++
+			LogWarn("AgentQA", "Health Issue: Active waiter has cancelled context",
+				fmt.Sprintf("Directory: %s, Waiter: %s", dirKey, waiter.Name))
+		default:
+			// Waiter context is still active
+		}
+	}
+
+	// Log overall health summary
+	if cancelledWaiters > 0 {
+		LogWarn("AgentQA", "Health Summary",
+			fmt.Sprintf("Directories: %d, Active Waiters: %d, Cancelled Waiters: %d",
+				len(r.directories), len(r.activeWaiters), cancelledWaiters))
+	}
 }
 
 // Global registry instance

@@ -398,12 +398,18 @@ func main() {
 		),
 	)
 
+	getSystemHealthTool := mcp.NewTool(
+		"get_system_health",
+		mcp.WithDescription("Get diagnostic information about the Q&A system health, including active waiters and channel status."),
+	)
+
 	// 🔗 Register agent communication tools
 	s.AddTool(answerQuestionTool, handleAnswerQuestion)
 	s.AddTool(getNextQuestionTool, handleGetNextQuestion)
 	s.AddTool(askSpecialistTool, handleAskSpecialist)
 	s.AddTool(listSpecialistsTool, handleListSpecialists)
 	s.AddTool(getAnswerTool, handleGetAnswer)
+	s.AddTool(getSystemHealthTool, handleGetSystemHealth)
 
 	// 🚦 Setup signal handling for graceful shutdown
 	sigChan := make(chan os.Signal, 1)

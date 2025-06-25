@@ -319,3 +319,15 @@ func handleGetAnswer(ctx context.Context, request mcp.CallToolRequest) (*mcp.Cal
 	resultBytes, _ := json.Marshal(result)
 	return mcp.NewToolResultText(string(resultBytes)), nil
 }
+
+// handleGetSystemHealth returns diagnostic information about the Q&A system
+func handleGetSystemHealth(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	health := agentQARegistry.GetSystemHealth()
+
+	resultBytes, err := json.Marshal(health)
+	if err != nil {
+		return mcp.NewToolResultError("Failed to marshal system health"), nil
+	}
+
+	return mcp.NewToolResultText(string(resultBytes)), nil
+}

@@ -588,6 +588,44 @@ func (p *AgentsQAPageView) showDirectoryDetails(dirKey string) {
 	}
 
 	detail += fmt.Sprintf("\n[yellow]Pending Questions:[white] %d\n", pendingCount)
+
+	// Add system health information
+	health := agentQARegistry.GetSystemHealth()
+	if directories, ok := health["directories"].([]map[string]any); ok {
+		for _, dirHealth := range directories {
+			if dirKey, ok := dirHealth["key"].(string); ok && dirKey == dir.Key {
+				detail += "\n[yellow]System Health:[white]\n"
+
+				if hasQueue, ok := dirHealth["has_queue"].(bool); ok {
+					if hasQueue {
+						detail += "✅ Queue: Active\n"
+					} else {
+						detail += "❌ Queue: Missing\n"
+					}
+				}
+
+				if hasWaiter, ok := dirHealth["has_waiter"].(bool); ok {
+					if hasWaiter {
+						detail += "✅ Waiter: Active"
+						if waiterName, ok := dirHealth["waiter_name"].(string); ok {
+							detail += fmt.Sprintf(" (%s)", waiterName)
+						}
+						if lastSeen, ok := dirHealth["waiter_last_seen"].(string); ok {
+							detail += fmt.Sprintf(" - Last seen: %s", lastSeen)
+						}
+						if contextCancelled, ok := dirHealth["waiter_context_cancelled"].(bool); ok && contextCancelled {
+							detail += " ⚠️ [red]Context Cancelled[white]"
+						}
+						detail += "\n"
+					} else {
+						detail += "❌ Waiter: None\n"
+					}
+				}
+				break
+			}
+		}
+	}
+
 	detail += "\n[gray]Specialists can connect at any time to answer questions in this directory[white]\n"
 
 	p.detailView.SetText(detail)
@@ -597,7 +635,6 @@ func (p *AgentsQAPageView) showDirectoryDetails(dirKey string) {
 func (p *AgentsQAPageView) getSpecialistInfo(name string) *SpecialistAgent {
 	return nil
 }
-
 
 // GetView returns the main view for this page
 func (p *AgentsQAPageView) GetView() tview.Primitive {
