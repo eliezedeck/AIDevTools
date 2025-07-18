@@ -11,46 +11,46 @@ import (
 
 // ProcessDetailPageView represents the process detail page - IDIOMATIC IMPLEMENTATION
 type ProcessDetailPageView struct {
-	tuiApp         *TUIApp
-	view           *tview.Flex
-	infoPanel      *tview.TextView
-	logView        *tview.TextView
-	inputField     *tview.InputField
-	statusBar      *tview.TextView
-	processID      string
-	autoScroll     bool
-	FocusedItem    int // 0: log view, 1: input field
-	lastLogContent string // Cache for incremental updates
-	isScrolling    bool // Track if user is actively scrolling
-	lastScrollTime time.Time // Track when user last scrolled
+	tuiApp             *TUIApp
+	view               *tview.Flex
+	infoPanel          *tview.TextView
+	logView            *tview.TextView
+	inputField         *tview.InputField
+	statusBar          *tview.TextView
+	processID          string
+	autoScroll         bool
+	FocusedItem        int           // 0: log view, 1: input field
+	lastLogContent     string        // Cache for incremental updates
+	isScrolling        bool          // Track if user is actively scrolling
+	lastScrollTime     time.Time     // Track when user last scrolled
 	scrollLockDuration time.Duration // How long to lock updates after scroll
 }
 
 // NewProcessDetailPageView creates a new process detail page view
 func NewProcessDetailPageView(tuiApp *TUIApp) *ProcessDetailPageView {
 	p := &ProcessDetailPageView{
-		tuiApp:         tuiApp,
-		infoPanel:      tview.NewTextView(),
-		logView:        tview.NewTextView(),
-		inputField:     tview.NewInputField(),
-		statusBar:      tview.NewTextView(),
-		autoScroll:     true,
-		FocusedItem:    0,
-		lastLogContent: "",
-		isScrolling:    false,
-		lastScrollTime: time.Now(),
+		tuiApp:             tuiApp,
+		infoPanel:          tview.NewTextView(),
+		logView:            tview.NewTextView(),
+		inputField:         tview.NewInputField(),
+		statusBar:          tview.NewTextView(),
+		autoScroll:         true,
+		FocusedItem:        0,
+		lastLogContent:     "",
+		isScrolling:        false,
+		lastScrollTime:     time.Now(),
 		scrollLockDuration: 3 * time.Second, // Lock updates for 3 seconds after scroll
 	}
-	
+
 	p.setupInfoPanel()
 	p.setupLogView()
 	p.setupInputField()
 	p.setupStatusBar()
 	p.setupLayout()
-	
+
 	// Initialize scroll status display
 	p.updateScrollStatus()
-	
+
 	return p
 }
 
@@ -96,10 +96,10 @@ func (p *ProcessDetailPageView) setupLayout() {
 		AddItem(p.logView, 0, 1, true).
 		AddItem(p.inputField, 3, 0, false).
 		AddItem(p.statusBar, 4, 0, false)
-	
+
 	// Set up global key handlers for the main view
 	p.view.SetInputCapture(p.handleGlobalKeys)
-	
+
 	// Set up mouse handler for the log view to detect scroll events
 	p.logView.SetMouseCapture(p.handleLogViewMouse)
 }
@@ -174,7 +174,7 @@ func (p *ProcessDetailPageView) switchFocus() {
 func (p *ProcessDetailPageView) toggleAutoScroll() {
 	p.autoScroll = !p.autoScroll
 	p.updateScrollStatus()
-	
+
 	// If enabling auto-scroll, scroll to end immediately
 	if p.autoScroll {
 		p.logView.ScrollToEnd()
@@ -188,23 +188,23 @@ func (p *ProcessDetailPageView) sendInput(input string) {
 	if p.processID == "" {
 		return
 	}
-	
+
 	tracker, exists := GetProcessByID(p.processID)
 	if !exists {
 		return
 	}
-	
+
 	tracker.Mutex.Lock()
 	defer tracker.Mutex.Unlock()
-	
+
 	if tracker.Status != StatusRunning {
 		return
 	}
-	
+
 	if tracker.StdinWriter == nil {
 		return
 	}
-	
+
 	// Send input with newline
 	finalInput := input + "\n"
 	_, err := tracker.StdinWriter.Write([]byte(finalInput))
@@ -213,7 +213,7 @@ func (p *ProcessDetailPageView) sendInput(input string) {
 		p.appendToLogView(fmt.Sprintf("\n[ERROR] Failed to send input: %s\n", err.Error()))
 		return
 	}
-	
+
 	// Add the input to log view for visual feedback
 	p.appendToLogView(fmt.Sprintf("\n[STDIN] %s\n", input))
 }
@@ -255,7 +255,7 @@ func (p *ProcessDetailPageView) updateScrollStatus() {
 	if p.autoScroll {
 		autoScrollStatus = "ON"
 	}
-	
+
 	title := fmt.Sprintf(" Logs [Auto-scroll: %s] ", autoScrollStatus)
 	if p.FocusedItem == 0 {
 		title += "[FOCUSED]"
@@ -268,13 +268,13 @@ func (p *ProcessDetailPageView) isScrollLocked() bool {
 	if !p.isScrolling {
 		return false
 	}
-	
+
 	// Check if scroll lock duration has passed
 	if time.Since(p.lastScrollTime) > p.scrollLockDuration {
 		p.isScrolling = false
 		return false
 	}
-	
+
 	return true
 }
 
@@ -283,7 +283,7 @@ func (p *ProcessDetailPageView) SetProcess(processID string) {
 	p.processID = processID
 	p.lastLogContent = "" // Reset cache
 	p.isScrolling = false // Reset scroll state
-	p.autoScroll = true // Re-enable auto-scroll for new process
+	p.autoScroll = true   // Re-enable auto-scroll for new process
 	p.updateScrollStatus()
 	p.updateInfo()
 	p.updateLogs()
@@ -311,25 +311,36 @@ func (p *ProcessDetailPageView) updateInfo() {
 		p.infoPanel.SetText("No process selected")
 		return
 	}
-	
+
 	tracker, exists := GetProcessByID(p.processID)
 	if !exists {
 		p.infoPanel.SetText("Process not found")
 		return
 	}
-	
+
 	tracker.Mutex.RLock()
 	defer tracker.Mutex.RUnlock()
-	
-	// Calculate uptime
-	uptime := time.Since(tracker.StartTime).Truncate(time.Second)
-	
+
+	// Calculate uptime or show execution time for completed processes
+	var timeInfo string
+	if tracker.Duration != nil {
+		// ⏱️ Process has finished - show execution time
+		timeInfo = fmt.Sprintf("[yellow]Execution Time:[white] %s", tracker.Duration.Truncate(time.Millisecond).String())
+		if tracker.EndTime != nil {
+			timeInfo += fmt.Sprintf("\n[yellow]End Time:[white] %s", tracker.EndTime.Format("2006-01-02 15:04:05"))
+		}
+	} else {
+		// 🔄 Process is still running - show uptime
+		uptime := time.Since(tracker.StartTime).Truncate(time.Second)
+		timeInfo = fmt.Sprintf("[yellow]Uptime:[white] %s", uptime.String())
+	}
+
 	// Format command
 	command := tracker.Command
 	if len(tracker.Args) > 0 {
 		command += " " + strings.Join(tracker.Args, " ")
 	}
-	
+
 	// Build info text
 	info := fmt.Sprintf(`[yellow]ID:[white] %s
 [yellow]Name:[white] %s
@@ -339,7 +350,7 @@ func (p *ProcessDetailPageView) updateInfo() {
 [yellow]Working Dir:[white] %s
 [yellow]Session:[white] %s
 [yellow]Start Time:[white] %s
-[yellow]Uptime:[white] %s
+%s
 [yellow]Buffer Size:[white] %s`,
 		tracker.ID,
 		getStringOrDash(tracker.Name),
@@ -349,13 +360,13 @@ func (p *ProcessDetailPageView) updateInfo() {
 		getStringOrDash(tracker.WorkingDir),
 		getStringOrDash(tracker.SessionID),
 		tracker.StartTime.Format("2006-01-02 15:04:05"),
-		uptime.String(),
+		timeInfo,
 		formatBytes(tracker.BufferSize))
-	
+
 	if tracker.ExitCode != nil {
 		info += fmt.Sprintf("\n[yellow]Exit Code:[white] %d", *tracker.ExitCode)
 	}
-	
+
 	p.infoPanel.SetText(info)
 }
 
@@ -364,16 +375,16 @@ func (p *ProcessDetailPageView) updateLogs() {
 	if p.processID == "" {
 		return
 	}
-	
+
 	tracker, exists := GetProcessByID(p.processID)
 	if !exists {
 		p.logView.SetText("Process not found")
 		return
 	}
-	
+
 	tracker.Mutex.RLock()
 	defer tracker.Mutex.RUnlock()
-	
+
 	// Get combined output or separate streams
 	var output string
 	if tracker.CombineOutput {
@@ -381,7 +392,7 @@ func (p *ProcessDetailPageView) updateLogs() {
 	} else {
 		stdout := tracker.StdoutBuffer.GetContent()
 		stderr := tracker.StderrBuffer.GetContent()
-		
+
 		// Interleave stdout and stderr (simplified approach)
 		if stdout != "" && stderr != "" {
 			output = "[STDOUT]\n" + stdout + "\n[STDERR]\n" + stderr
@@ -391,11 +402,11 @@ func (p *ProcessDetailPageView) updateLogs() {
 			output = stderr
 		}
 	}
-	
+
 	if output == "" {
 		output = "No output available"
 	}
-	
+
 	p.logView.SetText(output)
 	p.lastLogContent = output
 }
@@ -405,21 +416,21 @@ func (p *ProcessDetailPageView) updateLogsIncremental() {
 	if p.processID == "" {
 		return
 	}
-	
+
 	// Skip updates if user is actively scrolling
 	if p.isScrollLocked() {
 		return
 	}
-	
+
 	tracker, exists := GetProcessByID(p.processID)
 	if !exists {
 		p.logView.SetText("Process not found")
 		return
 	}
-	
+
 	tracker.Mutex.RLock()
 	defer tracker.Mutex.RUnlock()
-	
+
 	// Get current output
 	var currentOutput string
 	if tracker.CombineOutput {
@@ -427,7 +438,7 @@ func (p *ProcessDetailPageView) updateLogsIncremental() {
 	} else {
 		stdout := tracker.StdoutBuffer.GetContent()
 		stderr := tracker.StderrBuffer.GetContent()
-		
+
 		// Interleave stdout and stderr (simplified approach)
 		if stdout != "" && stderr != "" {
 			currentOutput = "[STDOUT]\n" + stdout + "\n[STDERR]\n" + stderr
@@ -437,13 +448,13 @@ func (p *ProcessDetailPageView) updateLogsIncremental() {
 			currentOutput = stderr
 		}
 	}
-	
+
 	// IDIOMATIC INCREMENTAL UPDATE: Only update if content actually changed
 	if currentOutput != p.lastLogContent {
 		if currentOutput == "" {
 			currentOutput = "No output available"
 		}
-		
+
 		// Check if we can do an incremental append
 		if p.lastLogContent != "" && strings.HasPrefix(currentOutput, p.lastLogContent) {
 			// IDIOMATIC: Append only the new content
@@ -465,7 +476,7 @@ func (p *ProcessDetailPageView) updateLogsIncremental() {
 			// Note: tview TextView doesn't support SetScrollOffset, so scroll position
 			// may be lost on full updates. This is a limitation we accept to fix the freeze.
 		}
-		
+
 		p.lastLogContent = currentOutput
 	}
 }

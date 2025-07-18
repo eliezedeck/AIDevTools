@@ -39,6 +39,8 @@ type ProcessTracker struct {
 	DelayStart    time.Duration  `json:"delay_start"`
 	SyncDelay     bool           `json:"sync_delay"`
 	StartTime     time.Time      `json:"start_time"`
+	EndTime       *time.Time     `json:"end_time,omitempty"` // ⏰ When process finished
+	Duration      *time.Duration `json:"duration,omitempty"` // ⏱️ Total execution time
 	LastAccessed  time.Time      `json:"last_accessed"`
 	Status        ProcessStatus  `json:"status"`
 	StdoutCursor  int64          `json:"stdout_cursor"`
@@ -52,13 +54,16 @@ type ProcessTracker struct {
 }
 
 type OutputResponse struct {
-	ProcessID    string        `json:"process_id"`
-	Stdout       string        `json:"stdout,omitempty"`
-	Stderr       string        `json:"stderr,omitempty"`
-	StdoutCursor int64         `json:"stdout_cursor"`
-	StderrCursor int64         `json:"stderr_cursor"`
-	Status       ProcessStatus `json:"status"`
-	ExitCode     *int          `json:"exit_code,omitempty"`
+	ProcessID    string         `json:"process_id"`
+	Stdout       string         `json:"stdout,omitempty"`
+	Stderr       string         `json:"stderr,omitempty"`
+	StdoutCursor int64          `json:"stdout_cursor"`
+	StderrCursor int64          `json:"stderr_cursor"`
+	Status       ProcessStatus  `json:"status"`
+	ExitCode     *int           `json:"exit_code,omitempty"`
+	StartTime    *time.Time     `json:"start_time,omitempty"` // ⏰ When process started
+	EndTime      *time.Time     `json:"end_time,omitempty"`   // ⏰ When process finished
+	Duration     *time.Duration `json:"duration,omitempty"`   // ⏱️ Total execution time
 }
 
 type ProcessRegistry struct {
@@ -78,6 +83,15 @@ type RingBuffer struct {
 	maxSize    int64
 	totalBytes int64
 	mutex      sync.RWMutex
+}
+
+// captureProcessEndTime sets the end time and calculates duration for a finished process
+// Must be called with tracker.Mutex already locked
+func captureProcessEndTime(tracker *ProcessTracker) {
+	now := time.Now()
+	tracker.EndTime = &now
+	duration := now.Sub(tracker.StartTime)
+	tracker.Duration = &duration
 }
 
 func NewRingBuffer(maxSize int64) *RingBuffer {
@@ -210,10 +224,10 @@ func filterOutput(input string, commands [][]string) (string, error) {
 
 		cmd := exec.CommandContext(ctx, program, args...)
 		cmd.Stdin = strings.NewReader(currentInput)
-		
+
 		// Run command and get output
 		output, err := cmd.CombinedOutput()
-		
+
 		// In bash pipes, the output is always passed to the next command,
 		// regardless of exit code (unless the command completely fails to execute)
 		if err != nil {
@@ -226,7 +240,7 @@ func filterOutput(input string, commands [][]string) (string, error) {
 				currentInput = string(output)
 				continue
 			}
-			
+
 			// This is a real error (command not found, permission denied, etc.)
 			if ctx.Err() == context.DeadlineExceeded {
 				return currentInput, fmt.Errorf("filter command %d (%s) timed out", i, program)
@@ -345,14 +359,14 @@ func (r *ProcessRegistry) removeProcess(id string) {
 func (r *ProcessRegistry) killProcessesBySession(sessionID string) int {
 	r.mutex.Lock()
 	defer r.mutex.Unlock()
-	
+
 	killedCount := 0
 	for _, tracker := range r.processes {
 		tracker.Mutex.RLock()
-		if tracker.SessionID == sessionID && 
+		if tracker.SessionID == sessionID &&
 			(tracker.Status == StatusRunning || tracker.Status == StatusPending) {
 			tracker.Mutex.RUnlock()
-			
+
 			// Kill the process
 			tracker.Mutex.Lock()
 			if tracker.Process != nil && tracker.Process.Process != nil {
@@ -366,7 +380,7 @@ func (r *ProcessRegistry) killProcessesBySession(sessionID string) int {
 				}
 				tracker.Status = StatusKilled
 				killedCount++
-				
+
 				// Log session cleanup kill
 				logMsg := fmt.Sprintf("Process killed (session cleanup): %s", tracker.Command)
 				if tracker.Name != "" {
@@ -378,7 +392,7 @@ func (r *ProcessRegistry) killProcessesBySession(sessionID string) int {
 				// Cancel pending processes
 				tracker.Status = StatusKilled
 				killedCount++
-				
+
 				// Log cancelled pending process
 				logMsg := fmt.Sprintf("Pending process cancelled (session cleanup): %s", tracker.Command)
 				if tracker.Name != "" {
@@ -391,7 +405,7 @@ func (r *ProcessRegistry) killProcessesBySession(sessionID string) int {
 			tracker.Mutex.RUnlock()
 		}
 	}
-	
+
 	return killedCount
 }
 
@@ -416,6 +430,7 @@ func executeDelayedProcess(ctx context.Context, tracker *ProcessTracker, envVars
 	stdinPipe, err := cmd.StdinPipe()
 	if err != nil {
 		tracker.Mutex.Lock()
+		captureProcessEndTime(tracker) // ⏰ Capture timing for failed setup
 		tracker.Status = StatusFailed
 		tracker.Mutex.Unlock()
 		return fmt.Errorf("failed to create stdin pipe: %v", err)
@@ -426,6 +441,7 @@ func executeDelayedProcess(ctx context.Context, tracker *ProcessTracker, envVars
 		stdoutPipe, err := cmd.StdoutPipe()
 		if err != nil {
 			tracker.Mutex.Lock()
+			captureProcessEndTime(tracker) // ⏰ Capture timing for failed setup
 			tracker.Status = StatusFailed
 			tracker.Mutex.Unlock()
 			return fmt.Errorf("failed to create stdout pipe: %v", err)
@@ -434,6 +450,7 @@ func executeDelayedProcess(ctx context.Context, tracker *ProcessTracker, envVars
 		stderrPipe, err := cmd.StderrPipe()
 		if err != nil {
 			tracker.Mutex.Lock()
+			captureProcessEndTime(tracker) // ⏰ Capture timing for failed setup
 			tracker.Status = StatusFailed
 			tracker.Mutex.Unlock()
 			return fmt.Errorf("failed to create stderr pipe: %v", err)
@@ -441,6 +458,7 @@ func executeDelayedProcess(ctx context.Context, tracker *ProcessTracker, envVars
 
 		if err := cmd.Start(); err != nil {
 			tracker.Mutex.Lock()
+			captureProcessEndTime(tracker) // ⏰ Capture timing for failed start
 			tracker.Status = StatusFailed
 			tracker.Mutex.Unlock()
 			return fmt.Errorf("failed to start process: %v", err)
@@ -451,7 +469,7 @@ func executeDelayedProcess(ctx context.Context, tracker *ProcessTracker, envVars
 		tracker.PID = cmd.Process.Pid
 		tracker.StdinWriter = stdinPipe
 		tracker.Status = StatusRunning
-		
+
 		// Log process start
 		logMsg := fmt.Sprintf("Process started: %s", tracker.Command)
 		if len(tracker.Args) > 0 {
@@ -465,7 +483,7 @@ func executeDelayedProcess(ctx context.Context, tracker *ProcessTracker, envVars
 			details += fmt.Sprintf(", session: %s", tracker.SessionID)
 		}
 		LogInfo("Process", logMsg, details)
-		
+
 		tracker.Mutex.Unlock()
 
 		// Stream both stdout and stderr to the same buffer (chronological order preserved)
@@ -476,6 +494,7 @@ func executeDelayedProcess(ctx context.Context, tracker *ProcessTracker, envVars
 		stdoutPipe, err := cmd.StdoutPipe()
 		if err != nil {
 			tracker.Mutex.Lock()
+			captureProcessEndTime(tracker) // ⏰ Capture timing for failed setup
 			tracker.Status = StatusFailed
 			tracker.Mutex.Unlock()
 			return fmt.Errorf("failed to create stdout pipe: %v", err)
@@ -484,6 +503,7 @@ func executeDelayedProcess(ctx context.Context, tracker *ProcessTracker, envVars
 		stderrPipe, err := cmd.StderrPipe()
 		if err != nil {
 			tracker.Mutex.Lock()
+			captureProcessEndTime(tracker) // ⏰ Capture timing for failed setup
 			tracker.Status = StatusFailed
 			tracker.Mutex.Unlock()
 			return fmt.Errorf("failed to create stderr pipe: %v", err)
@@ -491,6 +511,7 @@ func executeDelayedProcess(ctx context.Context, tracker *ProcessTracker, envVars
 
 		if err := cmd.Start(); err != nil {
 			tracker.Mutex.Lock()
+			captureProcessEndTime(tracker) // ⏰ Capture timing for failed start
 			tracker.Status = StatusFailed
 			tracker.Mutex.Unlock()
 			return fmt.Errorf("failed to start process: %v", err)
@@ -501,7 +522,7 @@ func executeDelayedProcess(ctx context.Context, tracker *ProcessTracker, envVars
 		tracker.PID = cmd.Process.Pid
 		tracker.StdinWriter = stdinPipe
 		tracker.Status = StatusRunning
-		
+
 		// Log process start
 		logMsg := fmt.Sprintf("Process started: %s", tracker.Command)
 		if len(tracker.Args) > 0 {
@@ -515,7 +536,7 @@ func executeDelayedProcess(ctx context.Context, tracker *ProcessTracker, envVars
 			details += fmt.Sprintf(", session: %s", tracker.SessionID)
 		}
 		LogInfo("Process", logMsg, details)
-		
+
 		tracker.Mutex.Unlock()
 
 		go streamToRingBuffer(stdoutPipe, tracker.StdoutBuffer)
@@ -529,8 +550,12 @@ func executeDelayedProcess(ctx context.Context, tracker *ProcessTracker, envVars
 
 		// If process was already killed (e.g., by session cleanup), don't override the status
 		if tracker.Status == StatusKilled {
+			captureProcessEndTime(tracker) // ⏰ Still capture timing for killed processes
 			return
 		}
+
+		// ⏰ Capture end time and duration for finished processes
+		captureProcessEndTime(tracker)
 
 		if err != nil {
 			if exitError, ok := err.(*exec.ExitError); ok {
@@ -549,7 +574,7 @@ func executeDelayedProcess(ctx context.Context, tracker *ProcessTracker, envVars
 			tracker.ExitCode = &exitCode
 			tracker.Status = StatusCompleted
 		}
-		
+
 		// Log process termination (SSE mode only)
 		logMsg := fmt.Sprintf("💀 Process terminated: %s", tracker.Command)
 		if tracker.Name != "" {
@@ -571,9 +596,9 @@ func executeDelayedProcess(ctx context.Context, tracker *ProcessTracker, envVars
 		}
 		// Log as error if process failed, otherwise info
 		if tracker.Status == StatusFailed {
-			LogError("Process", "Process terminated: " + cmdName, logMsg)
+			LogError("Process", "Process terminated: "+cmdName, logMsg)
 		} else {
-			LogInfo("Process", "Process terminated: " + cmdName, logMsg)
+			LogInfo("Process", "Process terminated: "+cmdName, logMsg)
 		}
 	}()
 
@@ -675,7 +700,7 @@ func handleSpawnProcess(ctx context.Context, request mcp.CallToolRequest) (*mcp.
 
 	// Extract session ID from context (for SSE mode)
 	sessionID := ExtractSessionFromContext(ctx)
-	
+
 	processID := uuid.New().String()
 	tracker := &ProcessTracker{
 		ID:            processID,
@@ -712,7 +737,7 @@ func handleSpawnProcess(ctx context.Context, request mcp.CallToolRequest) (*mcp.
 			}
 
 			registry.addProcess(tracker)
-			
+
 			// Add to session manager if in SSE mode
 			if sessionID != "" && sessionManager != nil {
 				sessionManager.AddProcessToSession(sessionID, processID)
@@ -728,7 +753,7 @@ func handleSpawnProcess(ctx context.Context, request mcp.CallToolRequest) (*mcp.
 			// Async mode: set pending status, register immediately, start background delay
 			tracker.Status = StatusPending
 			registry.addProcess(tracker)
-			
+
 			// Add to session manager if in SSE mode
 			if sessionID != "" && sessionManager != nil {
 				sessionManager.AddProcessToSession(sessionID, processID)
@@ -758,7 +783,7 @@ func handleSpawnProcess(ctx context.Context, request mcp.CallToolRequest) (*mcp.
 		}
 
 		registry.addProcess(tracker)
-		
+
 		// Add to session manager if in SSE mode
 		if sessionID != "" && sessionManager != nil {
 			sessionManager.AddProcessToSession(sessionID, processID)
@@ -886,10 +911,10 @@ func handleSpawnMultipleProcesses(ctx context.Context, request mcp.CallToolReque
 
 		// Create tracker
 		processID := uuid.New().String()
-		
+
 		// Extract session ID from context (for SSE mode)
 		sessionID := ExtractSessionFromContext(ctx)
-		
+
 		tracker := &ProcessTracker{
 			ID:            processID,
 			Name:          name,
@@ -919,7 +944,7 @@ func handleSpawnMultipleProcesses(ctx context.Context, request mcp.CallToolReque
 			deferredMode = true
 			tracker.Status = StatusPending
 			registry.addProcess(tracker)
-			
+
 			// Add to session manager if in SSE mode
 			if sessionID != "" && sessionManager != nil {
 				sessionManager.AddProcessToSession(sessionID, processID)
@@ -959,7 +984,7 @@ func handleSpawnMultipleProcesses(ctx context.Context, request mcp.CallToolReque
 			}
 
 			registry.addProcess(tracker)
-			
+
 			// Add to session manager if in SSE mode
 			if sessionID != "" && sessionManager != nil {
 				sessionManager.AddProcessToSession(sessionID, processID)
@@ -1000,6 +1025,7 @@ func handleSpawnMultipleProcesses(ctx context.Context, request mcp.CallToolReque
 				if err != nil {
 					// Process failed to start - update status
 					info.tracker.Mutex.Lock()
+					captureProcessEndTime(info.tracker) // ⏰ Capture timing for delayed process failure
 					info.tracker.Status = StatusFailed
 					info.tracker.Mutex.Unlock()
 				}
@@ -1126,6 +1152,9 @@ func handleGetPartialProcessOutput(ctx context.Context, request mcp.CallToolRequ
 		StderrCursor: tracker.StderrCursor,
 		Status:       tracker.Status,
 		ExitCode:     tracker.ExitCode,
+		StartTime:    &tracker.StartTime,
+		EndTime:      tracker.EndTime,
+		Duration:     tracker.Duration,
 	}
 
 	if tracker.CombineOutput {
@@ -1331,6 +1360,9 @@ func handleGetFullProcessOutput(ctx context.Context, request mcp.CallToolRequest
 		StderrCursor: stderrCursor,
 		Status:       tracker.Status,
 		ExitCode:     tracker.ExitCode,
+		StartTime:    &tracker.StartTime,
+		EndTime:      tracker.EndTime,
+		Duration:     tracker.Duration,
 	}
 
 	if tracker.CombineOutput {
@@ -1559,24 +1591,24 @@ func handleKillProcess(ctx context.Context, request mcp.CallToolRequest) (*mcp.C
 			}
 		}
 		tracker.Status = StatusKilled
-		
+
 		// Log manual kill (SSE mode only)
-			logMsg := fmt.Sprintf("🔫 Process killed manually: %s", tracker.Command)
-			if tracker.Name != "" {
-				logMsg += fmt.Sprintf(" (name: %s)", tracker.Name)
-			}
-			logMsg += fmt.Sprintf(" (PID: %d, ID: %s", tracker.PID, processID)
-			if tracker.SessionID != "" {
-				logMsg += fmt.Sprintf(", session: %s", tracker.SessionID)
-			}
-			logMsg += ")"
-			
-			// Log as error if process failed, otherwise info
-			if tracker.Status == StatusFailed {
-				LogError("Process", "Process terminated: " + tracker.Command, logMsg)
-			} else {
-				LogInfo("Process", "Process terminated: " + tracker.Command, logMsg)
-			}
+		logMsg := fmt.Sprintf("🔫 Process killed manually: %s", tracker.Command)
+		if tracker.Name != "" {
+			logMsg += fmt.Sprintf(" (name: %s)", tracker.Name)
+		}
+		logMsg += fmt.Sprintf(" (PID: %d, ID: %s", tracker.PID, processID)
+		if tracker.SessionID != "" {
+			logMsg += fmt.Sprintf(", session: %s", tracker.SessionID)
+		}
+		logMsg += ")"
+
+		// Log as error if process failed, otherwise info
+		if tracker.Status == StatusFailed {
+			LogError("Process", "Process terminated: "+tracker.Command, logMsg)
+		} else {
+			LogInfo("Process", "Process terminated: "+tracker.Command, logMsg)
+		}
 	}
 
 	result := map[string]any{
@@ -1621,6 +1653,15 @@ func handleGetProcessStatus(ctx context.Context, request mcp.CallToolRequest) (*
 		"stderr_cursor":  tracker.StderrCursor,
 		"stdout_size":    tracker.StdoutBuffer.Len(),
 		"stdout_total":   tracker.StdoutBuffer.TotalBytes(),
+	}
+
+	// ⏰ Add timing information for completed processes
+	if tracker.EndTime != nil {
+		result["end_time"] = tracker.EndTime.Format(time.RFC3339)
+	}
+	if tracker.Duration != nil {
+		result["duration_ms"] = int64(*tracker.Duration / time.Millisecond)
+		result["duration"] = tracker.Duration.String()
 	}
 
 	if tracker.CombineOutput {

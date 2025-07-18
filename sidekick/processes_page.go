@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
@@ -406,7 +407,7 @@ func (p *ProcessesPageView) updateTableRow(row int, sessionGroups map[string][]*
 	p.table.SetCell(row, 2, tview.NewTableCell(fmt.Sprintf("%d", currentProcess.PID)).SetTextColor(tcell.ColorWhite))
 	p.table.SetCell(row, 3, tview.NewTableCell(p.formatName(currentProcess)).SetTextColor(tcell.ColorGreen))
 	p.table.SetCell(row, 4, tview.NewTableCell(p.formatCommand(currentProcess)).SetTextColor(tcell.ColorLightGray))
-	p.table.SetCell(row, 5, tview.NewTableCell(currentProcess.StartTime.Format("15:04:05")).SetTextColor(tcell.ColorLightBlue))
+	p.table.SetCell(row, 5, tview.NewTableCell(p.formatTime(currentProcess)).SetTextColor(tcell.ColorLightBlue))
 	p.table.SetCell(row, 6, tview.NewTableCell(currentProcess.ID).SetTextColor(tcell.ColorDarkGray))
 	currentProcess.Mutex.RUnlock()
 }
@@ -414,7 +415,7 @@ func (p *ProcessesPageView) updateTableRow(row int, sessionGroups map[string][]*
 // buildTableContent builds the complete table content
 func (p *ProcessesPageView) buildTableContent(sessionGroups map[string][]*ProcessTracker, selectedProcessID string) {
 	// Set header row
-	headers := []string{"Session", "Status", "PID", "Name", "Command", "Start Time", "ID"}
+	headers := []string{"Session", "Status", "PID", "Name", "Command", "Time", "ID"}
 	for col, header := range headers {
 		p.table.SetCell(0, col, tview.NewTableCell(header).
 			SetTextColor(tcell.ColorYellow).
@@ -466,7 +467,7 @@ func (p *ProcessesPageView) buildTableContent(sessionGroups map[string][]*Proces
 			p.table.SetCell(row, 2, tview.NewTableCell(fmt.Sprintf("%d", process.PID)).SetTextColor(tcell.ColorWhite))
 			p.table.SetCell(row, 3, tview.NewTableCell(p.formatName(process)).SetTextColor(tcell.ColorGreen))
 			p.table.SetCell(row, 4, tview.NewTableCell(p.formatCommand(process)).SetTextColor(tcell.ColorLightGray))
-			p.table.SetCell(row, 5, tview.NewTableCell(process.StartTime.Format("15:04:05")).SetTextColor(tcell.ColorLightBlue))
+			p.table.SetCell(row, 5, tview.NewTableCell(p.formatTime(process)).SetTextColor(tcell.ColorLightBlue))
 			p.table.SetCell(row, 6, tview.NewTableCell(process.ID).SetTextColor(tcell.ColorDarkGray))
 
 			process.Mutex.RUnlock()
@@ -591,6 +592,17 @@ func (p *ProcessesPageView) formatCommand(process *ProcessTracker) string {
 		command = command[:37] + "..."
 	}
 	return command
+}
+
+// formatTime formats time display for processes - shows duration for completed, start time for running
+func (p *ProcessesPageView) formatTime(process *ProcessTracker) string {
+	if process.Duration != nil {
+		// ⏱️ Show execution time for completed processes
+		return process.Duration.Truncate(time.Millisecond).String()
+	} else {
+		// 🕐 Show start time for running processes
+		return process.StartTime.Format("15:04:05")
+	}
 }
 
 // getStatusColor returns the appropriate color for a process status
