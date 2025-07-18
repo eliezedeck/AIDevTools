@@ -42,6 +42,20 @@ type TUIApp struct {
 	shutdownOnce      sync.Once
 	signalStopped     bool
 	signalMutex       sync.Mutex
+
+	// 🔋 Battery Optimization: Change tracking for efficient rendering
+	lastProcessUpdate    time.Time
+	lastNotificationTime time.Time
+	lastLogUpdate        time.Time
+	lastQATime           time.Time
+	processCount         int
+	notificationCount    int
+	logCount             int
+	qaCount              int
+	currentProcessID     string
+	dataChangeFlags      map[string]bool
+	adaptiveInterval     time.Duration
+	consecutiveNoChanges int
 }
 
 // NewTUIApp creates a new TUI application using idiomatic patterns
@@ -217,6 +231,11 @@ func (t *TUIApp) switchToPrevPage() {
 func (t *TUIApp) SwitchToPage(page PageType) {
 	t.currentPage = page
 
+	// 🔋 Clear currentProcessID when leaving process detail page
+	if page != ProcessDetailPage {
+		t.currentProcessID = ""
+	}
+
 	switch page {
 	case ProcessesPage:
 		t.pages.SwitchToPage("processes")
@@ -240,6 +259,7 @@ func (t *TUIApp) SwitchToPage(page PageType) {
 
 // ShowProcessDetail switches to the process detail page for a specific process
 func (t *TUIApp) ShowProcessDetail(processID string) {
+	t.currentProcessID = processID // 🔋 Track current process for efficient rendering
 	t.processDetailPage.SetProcess(processID)
 	t.SwitchToPage(ProcessDetailPage)
 }
@@ -320,25 +340,173 @@ func (t *TUIApp) checkRecoveryMode() {
 
 // shouldUpdate determines if a screen update is necessary using smart detection
 func (t *TUIApp) shouldUpdate() bool {
-	// Check if enough time has passed for rate limiting
-	if time.Since(t.lastUpdateTime) < 500*time.Millisecond {
+	now := time.Now()
+
+	// 🔋 Adaptive intervals: Longer delays when no changes detected
+	minInterval := t.getAdaptiveInterval()
+	if now.Sub(t.lastUpdateTime) < minInterval {
 		return false
 	}
 
 	// Always update process detail page when viewing it (for real-time logs)
+	// But use a shorter interval for logs
 	if t.currentPage == ProcessDetailPage {
-		return true
+		if now.Sub(t.lastUpdateTime) < 250*time.Millisecond {
+			return false
+		}
+		return t.hasProcessDetailDataChanged()
 	}
 
 	// For other pages, check if data actually changed
-	return t.hasDataChanged()
+	hasChanges := t.hasDataChanged()
+
+	// 🔋 Adjust adaptive interval based on change frequency
+	if hasChanges {
+		t.consecutiveNoChanges = 0
+		t.adaptiveInterval = 500 * time.Millisecond // Reset to fast updates
+	} else {
+		t.consecutiveNoChanges++
+		// Gradually increase interval up to 5 seconds when no changes
+		if t.consecutiveNoChanges > 10 {
+			t.adaptiveInterval = 5 * time.Second
+		} else if t.consecutiveNoChanges > 5 {
+			t.adaptiveInterval = 2 * time.Second
+		}
+	}
+
+	return hasChanges
 }
 
-// hasDataChanged checks if the underlying data has changed
+// getAdaptiveInterval returns the current adaptive update interval
+func (t *TUIApp) getAdaptiveInterval() time.Duration {
+	if t.adaptiveInterval == 0 {
+		t.adaptiveInterval = 500 * time.Millisecond // Initial interval
+	}
+	return t.adaptiveInterval
+}
+
+// hasProcessDetailDataChanged checks if process detail data has changed
+func (t *TUIApp) hasProcessDetailDataChanged() bool {
+	if t.processDetailPage == nil || t.currentProcessID == "" {
+		return false
+	}
+
+	// Check if the process output has new data
+	registry.mutex.RLock()
+	process, exists := registry.processes[t.currentProcessID]
+	registry.mutex.RUnlock()
+
+	if !exists {
+		return true // Process disappeared, update needed
+	}
+
+	process.Mutex.RLock()
+	status := process.Status
+	process.Mutex.RUnlock()
+
+	// Check if process status changed or new output available
+	return status != StatusCompleted && status != StatusKilled && status != StatusFailed
+}
+
+// hasDataChanged checks if the underlying data has changed using smart detection
 func (t *TUIApp) hasDataChanged() bool {
-	// This is a simplified check - in practice you could track modification times
-	// For now, we'll update less frequently but still catch changes
-	return true
+	now := time.Now()
+	hasChanges := false
+
+	// Initialize change flags if needed
+	if t.dataChangeFlags == nil {
+		t.dataChangeFlags = make(map[string]bool)
+	}
+
+	// 📊 Check process list changes
+	registry.mutex.RLock()
+	currentProcessCount := len(registry.processes)
+
+	// Track any process status/output changes
+	processListChanged := false
+	if currentProcessCount != t.processCount {
+		processListChanged = true
+		t.processCount = currentProcessCount
+	}
+
+	// Check for process status updates or new output
+	for _, process := range registry.processes {
+		process.Mutex.RLock()
+		lastAccessed := process.LastAccessed
+		status := process.Status
+		process.Mutex.RUnlock()
+
+		// If process was accessed recently, there might be new data
+		if lastAccessed.After(t.lastProcessUpdate) {
+			processListChanged = true
+		}
+
+		// Active processes might have new output
+		if status == StatusRunning || status == StatusPending {
+			if now.Sub(lastAccessed) < 2*time.Second {
+				processListChanged = true
+			}
+		}
+	}
+	registry.mutex.RUnlock()
+
+	if processListChanged {
+		t.lastProcessUpdate = now
+		hasChanges = true
+	}
+
+	// 🔔 Check notification changes
+	notificationHistory := notificationManager.GetHistory()
+	currentNotificationCount := len(notificationHistory)
+	if currentNotificationCount != t.notificationCount {
+		t.notificationCount = currentNotificationCount
+		hasChanges = true
+	}
+
+	// Check for new notifications by timestamp
+	if len(notificationHistory) > 0 {
+		latestNotification := notificationHistory[len(notificationHistory)-1]
+		if latestNotification.Timestamp.After(t.lastNotificationTime) {
+			t.lastNotificationTime = latestNotification.Timestamp
+			hasChanges = true
+		}
+	}
+
+	// 📝 Check log changes
+	logEntries := logger.GetEntries()
+	currentLogCount := len(logEntries)
+	if currentLogCount != t.logCount {
+		t.logCount = currentLogCount
+		hasChanges = true
+	}
+
+	// Check for new log entries by timestamp
+	if len(logEntries) > 0 {
+		latestLog := logEntries[len(logEntries)-1]
+		if latestLog.Timestamp.After(t.lastLogUpdate) {
+			t.lastLogUpdate = latestLog.Timestamp
+			hasChanges = true
+		}
+	}
+
+	// 🤖 Check agent Q&A changes
+	qaEntries := agentQARegistry.GetAllQAs()
+	currentQACount := len(qaEntries)
+	if currentQACount != t.qaCount {
+		t.qaCount = currentQACount
+		hasChanges = true
+	}
+
+	// Check for new Q&A entries by timestamp
+	if len(qaEntries) > 0 {
+		latestQA := qaEntries[0] // GetAllQAs returns newest first
+		if latestQA.Timestamp.After(t.lastQATime) {
+			t.lastQATime = latestQA.Timestamp
+			hasChanges = true
+		}
+	}
+
+	return hasChanges
 }
 
 // Run starts the TUI application
