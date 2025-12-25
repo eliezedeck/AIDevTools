@@ -138,6 +138,7 @@ func main() {
 	versionFlag := flag.Bool("version", false, "Print version and exit")
 	sseMode := flag.Bool("sse", true, "Run in SSE mode instead of stdio (default: true)")
 	tuiMode := flag.Bool("tui", true, "Enable TUI mode (default: true, only available with --sse)")
+	processesMode := flag.Bool("processes", false, "Enable process management tools (default: false)")
 	port := flag.String("port", "5050", "Port for SSE server (default: 5050)")
 	host := flag.String("host", "localhost", "Host for SSE server (default: localhost)")
 	flag.Parse()
@@ -181,141 +182,143 @@ func main() {
 		s.AddTool(speakTool, handleSpeak)
 	}
 
-	// 🔧 Define process management tools
-	spawnProcessTool := mcp.NewTool(
-		"spawn_process",
-		mcp.WithDescription("Spawn a new process and start tracking its output with configurable buffer size"),
-		mcp.WithString("command",
-			mcp.Required(),
-			mcp.Description("Command to execute"),
-		),
-		mcp.WithArray("args",
-			mcp.Description("Command arguments"),
-		),
-		mcp.WithString("working_dir",
-			mcp.Description("Working directory (optional)"),
-		),
-		mcp.WithObject("env",
-			mcp.Description("Environment variables (optional)"),
-		),
-		mcp.WithNumber("buffer_size",
-			mcp.Description("Ring buffer size in bytes (default: 10MB)"),
-		),
-		mcp.WithBoolean("combine_output",
-			mcp.Description("Whether to combine stdout and stderr into single stream (default: false)"),
-		),
-		mcp.WithNumber("delay",
-			mcp.Description("Delay in milliseconds before starting process (max: 300000 = 5 minutes). With sync_delay=false, returns immediately with 'pending' status and executes after delay. With sync_delay=true, waits for delay then starts process before returning with 'running' status"),
-		),
-		mcp.WithBoolean("sync_delay",
-			mcp.Description("Controls delay behavior: false (default) = return immediately with 'pending' status, execute later; true = wait for delay, start process, then return with 'running' status"),
-		),
-		mcp.WithString("name",
-			mcp.Description("Optional human-readable name for the process (non-unique)"),
-		),
-	)
+	// 🔧 Define and register process management tools (only if enabled)
+	if *processesMode {
+		spawnProcessTool := mcp.NewTool(
+			"spawn_process",
+			mcp.WithDescription("Spawn a new process and start tracking its output with configurable buffer size"),
+			mcp.WithString("command",
+				mcp.Required(),
+				mcp.Description("Command to execute"),
+			),
+			mcp.WithArray("args",
+				mcp.Description("Command arguments"),
+			),
+			mcp.WithString("working_dir",
+				mcp.Description("Working directory (optional)"),
+			),
+			mcp.WithObject("env",
+				mcp.Description("Environment variables (optional)"),
+			),
+			mcp.WithNumber("buffer_size",
+				mcp.Description("Ring buffer size in bytes (default: 10MB)"),
+			),
+			mcp.WithBoolean("combine_output",
+				mcp.Description("Whether to combine stdout and stderr into single stream (default: false)"),
+			),
+			mcp.WithNumber("delay",
+				mcp.Description("Delay in milliseconds before starting process (max: 300000 = 5 minutes). With sync_delay=false, returns immediately with 'pending' status and executes after delay. With sync_delay=true, waits for delay then starts process before returning with 'running' status"),
+			),
+			mcp.WithBoolean("sync_delay",
+				mcp.Description("Controls delay behavior: false (default) = return immediately with 'pending' status, execute later; true = wait for delay, start process, then return with 'running' status"),
+			),
+			mcp.WithString("name",
+				mcp.Description("Optional human-readable name for the process (non-unique)"),
+			),
+		)
 
-	getPartialProcessOutputTool := mcp.NewTool(
-		"get_partial_process_output",
-		mcp.WithDescription("Get incremental output from a process since last read (tail -f functionality)"),
-		mcp.WithString("process_id",
-			mcp.Required(),
-			mcp.Description("Process identifier"),
-		),
-		mcp.WithString("streams",
-			mcp.Description("Which streams to read from"),
-			mcp.Enum("stdout", "stderr", "both"),
-		),
-		mcp.WithNumber("max_lines",
-			mcp.Description("Maximum lines to return (optional)"),
-		),
-		mcp.WithArray("filters",
-			mcp.Description("Optional command pipeline - each element is [command, ...args]"),
-		),
-		mcp.WithNumber("delay",
-			mcp.Description("Delay before returning output in milliseconds (max: 120000 = 2 minutes). Smart delay with early termination - if process completes during delay, returns immediately with output"),
-		),
-	)
+		getPartialProcessOutputTool := mcp.NewTool(
+			"get_partial_process_output",
+			mcp.WithDescription("Get incremental output from a process since last read (tail -f functionality)"),
+			mcp.WithString("process_id",
+				mcp.Required(),
+				mcp.Description("Process identifier"),
+			),
+			mcp.WithString("streams",
+				mcp.Description("Which streams to read from"),
+				mcp.Enum("stdout", "stderr", "both"),
+			),
+			mcp.WithNumber("max_lines",
+				mcp.Description("Maximum lines to return (optional)"),
+			),
+			mcp.WithArray("filters",
+				mcp.Description("Optional command pipeline - each element is [command, ...args]"),
+			),
+			mcp.WithNumber("delay",
+				mcp.Description("Delay before returning output in milliseconds (max: 120000 = 2 minutes). Smart delay with early termination - if process completes during delay, returns immediately with output"),
+			),
+		)
 
-	getFullProcessOutputTool := mcp.NewTool(
-		"get_full_process_output",
-		mcp.WithDescription("Get the complete output from a process (all data in memory)"),
-		mcp.WithString("process_id",
-			mcp.Required(),
-			mcp.Description("Process identifier"),
-		),
-		mcp.WithString("streams",
-			mcp.Description("Which streams to read from"),
-			mcp.Enum("stdout", "stderr", "both"),
-		),
-		mcp.WithNumber("max_lines",
-			mcp.Description("Maximum lines to return (optional)"),
-		),
-		mcp.WithArray("filters",
-			mcp.Description("Optional command pipeline - each element is [command, ...args]"),
-		),
-		mcp.WithNumber("delay",
-			mcp.Description("Delay before returning output in milliseconds (max: 120000 = 2 minutes). Smart delay with early termination - if process completes during delay, returns immediately with output"),
-		),
-	)
+		getFullProcessOutputTool := mcp.NewTool(
+			"get_full_process_output",
+			mcp.WithDescription("Get the complete output from a process (all data in memory)"),
+			mcp.WithString("process_id",
+				mcp.Required(),
+				mcp.Description("Process identifier"),
+			),
+			mcp.WithString("streams",
+				mcp.Description("Which streams to read from"),
+				mcp.Enum("stdout", "stderr", "both"),
+			),
+			mcp.WithNumber("max_lines",
+				mcp.Description("Maximum lines to return (optional)"),
+			),
+			mcp.WithArray("filters",
+				mcp.Description("Optional command pipeline - each element is [command, ...args]"),
+			),
+			mcp.WithNumber("delay",
+				mcp.Description("Delay before returning output in milliseconds (max: 120000 = 2 minutes). Smart delay with early termination - if process completes during delay, returns immediately with output"),
+			),
+		)
 
-	sendProcessInputTool := mcp.NewTool(
-		"send_process_input",
-		mcp.WithDescription("Send input data to a running process's stdin"),
-		mcp.WithString("process_id",
-			mcp.Required(),
-			mcp.Description("Process identifier"),
-		),
-		mcp.WithString("input",
-			mcp.Required(),
-			mcp.Description("Input data to send to process stdin"),
-		),
-		mcp.WithBoolean("auto_newline",
-			mcp.Description("Automatically append newline character to input (default: true)"),
-		),
-	)
+		sendProcessInputTool := mcp.NewTool(
+			"send_process_input",
+			mcp.WithDescription("Send input data to a running process's stdin"),
+			mcp.WithString("process_id",
+				mcp.Required(),
+				mcp.Description("Process identifier"),
+			),
+			mcp.WithString("input",
+				mcp.Required(),
+				mcp.Description("Input data to send to process stdin"),
+			),
+			mcp.WithBoolean("auto_newline",
+				mcp.Description("Automatically append newline character to input (default: true)"),
+			),
+		)
 
-	listProcessesTool := mcp.NewTool(
-		"list_processes",
-		mcp.WithDescription("List all tracked processes and their status"),
-	)
+		listProcessesTool := mcp.NewTool(
+			"list_processes",
+			mcp.WithDescription("List all tracked processes and their status"),
+		)
 
-	killProcessTool := mcp.NewTool(
-		"kill_process",
-		mcp.WithDescription("Terminate a tracked process"),
-		mcp.WithString("process_id",
-			mcp.Required(),
-			mcp.Description("Process identifier"),
-		),
-	)
+		killProcessTool := mcp.NewTool(
+			"kill_process",
+			mcp.WithDescription("Terminate a tracked process"),
+			mcp.WithString("process_id",
+				mcp.Required(),
+				mcp.Description("Process identifier"),
+			),
+		)
 
-	getProcessStatusTool := mcp.NewTool(
-		"get_process_status",
-		mcp.WithDescription("Get detailed status of a process"),
-		mcp.WithString("process_id",
-			mcp.Required(),
-			mcp.Description("Process identifier"),
-		),
-	)
+		getProcessStatusTool := mcp.NewTool(
+			"get_process_status",
+			mcp.WithDescription("Get detailed status of a process"),
+			mcp.WithString("process_id",
+				mcp.Required(),
+				mcp.Description("Process identifier"),
+			),
+		)
 
-	spawnMultipleProcessesTool := mcp.NewTool(
-		"spawn_multiple_processes",
-		mcp.WithDescription("Spawn multiple processes sequentially with individual delays. Delays are cumulative (each delay occurs after previous process scheduled). In async mode (sync_delay=false for any process with delay>0), returns immediately - initial no-delay processes show 'running', first delayed process and all subsequent show 'pending'. In sync mode (all sync_delay=true), waits for all processes to start before returning with 'running' status"),
-		mcp.WithArray("processes",
-			mcp.Required(),
-			mcp.Description("Array of process configurations. Each supports: command (required), args, name, working_dir, env, buffer_size, delay (ms), sync_delay (bool). Delays are sequential - process N waits for its delay after process N-1 is scheduled"),
-		),
-	)
+		spawnMultipleProcessesTool := mcp.NewTool(
+			"spawn_multiple_processes",
+			mcp.WithDescription("Spawn multiple processes sequentially with individual delays. Delays are cumulative (each delay occurs after previous process scheduled). In async mode (sync_delay=false for any process with delay>0), returns immediately - initial no-delay processes show 'running', first delayed process and all subsequent show 'pending'. In sync mode (all sync_delay=true), waits for all processes to start before returning with 'running' status"),
+			mcp.WithArray("processes",
+				mcp.Required(),
+				mcp.Description("Array of process configurations. Each supports: command (required), args, name, working_dir, env, buffer_size, delay (ms), sync_delay (bool). Delays are sequential - process N waits for its delay after process N-1 is scheduled"),
+			),
+		)
 
-	// 🔗 Register process management tools
-	s.AddTool(spawnProcessTool, handleSpawnProcess)
-	s.AddTool(spawnMultipleProcessesTool, handleSpawnMultipleProcesses)
-	s.AddTool(getPartialProcessOutputTool, handleGetPartialProcessOutput)
-	s.AddTool(getFullProcessOutputTool, handleGetFullProcessOutput)
-	s.AddTool(sendProcessInputTool, handleSendProcessInput)
-	s.AddTool(listProcessesTool, handleListProcesses)
-	s.AddTool(killProcessTool, handleKillProcess)
-	s.AddTool(getProcessStatusTool, handleGetProcessStatus)
+		// 🔗 Register process management tools
+		s.AddTool(spawnProcessTool, handleSpawnProcess)
+		s.AddTool(spawnMultipleProcessesTool, handleSpawnMultipleProcesses)
+		s.AddTool(getPartialProcessOutputTool, handleGetPartialProcessOutput)
+		s.AddTool(getFullProcessOutputTool, handleGetFullProcessOutput)
+		s.AddTool(sendProcessInputTool, handleSendProcessInput)
+		s.AddTool(listProcessesTool, handleListProcesses)
+		s.AddTool(killProcessTool, handleKillProcess)
+		s.AddTool(getProcessStatusTool, handleGetProcessStatus)
+	}
 
 	// 🤝 Define agent communication tools
 
