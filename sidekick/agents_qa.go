@@ -277,10 +277,33 @@ func (r *AgentQARegistry) WaitForQuestionWithContext(ctx context.Context, name, 
 				existingWaiter.Cancel()
 			}
 			delete(r.activeWaiters, dirKey)
-
-			// Recreate the channel to ensure fresh state
-			r.qaQueues[dirKey] = make(chan *QuestionAnswer, 100)
-			LogInfo("AgentQA", fmt.Sprintf("Recreated channel for directory '%s' after context cancellation", dirKey))
+			
+			// Recover any orphaned questions that were being processed by the cancelled waiter
+			recoveredCount := 0
+			for _, qa := range r.qaHistory {
+				if qa.DirectoryKey == dirKey && qa.Status == QAStatusProcessing && qa.To == existingWaiter.Name {
+					// Reset the question to pending so it can be picked up again
+					qa.Status = QAStatusPending
+					qa.To = "" // Clear the assigned specialist
+					recoveredCount++
+					
+					// Try to requeue the question
+					if queue, exists := r.qaQueues[dirKey]; exists {
+						select {
+						case queue <- qa:
+							LogInfo("AgentQA", fmt.Sprintf("Requeued orphaned question %s for directory '%s'", qa.ID, dirKey))
+						default:
+							// Queue is full, mark as failed
+							qa.Status = QAStatusFailed
+							qa.Error = "Failed to requeue after specialist disconnection - queue full"
+							LogError("AgentQA", "Failed to requeue orphaned question", fmt.Sprintf("Question: %s, Directory: %s", qa.ID, dirKey))
+						}
+					}
+				}
+			}
+			
+			// Note: We intentionally do NOT recreate the queue here to preserve any pending questions
+			LogInfo("AgentQA", fmt.Sprintf("Cleaned up cancelled waiter for directory '%s', queue preserved, recovered %d orphaned questions", dirKey, recoveredCount))
 		default:
 			// Previous waiter is still active
 			r.mutex.Unlock()
@@ -903,6 +926,34 @@ func (r *AgentQARegistry) checkSystemHealth() {
 				fmt.Sprintf("Directory: %s, Pending: %d, Specialty: %s", dirKey, pendingCount, dir.Specialty))
 		}
 	}
+	
+	// Check for questions stuck in Processing status for too long
+	now := time.Now()
+	stuckProcessingThreshold := 15 * time.Minute
+	stuckQuestions := 0
+	
+	for _, qa := range r.qaHistory {
+		if qa.Status == QAStatusProcessing {
+			processingDuration := now.Sub(qa.Timestamp)
+			if processingDuration > stuckProcessingThreshold {
+				stuckQuestions++
+				LogWarn("AgentQA", "Health Issue: Question stuck in Processing status",
+					fmt.Sprintf("Question: %s, Directory: %s, Specialist: %s, Duration: %v", 
+						qa.ID, qa.DirectoryKey, qa.To, processingDuration))
+				
+				// Check if the specialist is still active
+				if waiter, exists := r.activeWaiters[qa.DirectoryKey]; exists && waiter.Name == qa.To {
+					// Specialist is still registered but hasn't answered
+					LogWarn("AgentQA", "Specialist still active but not responding",
+						fmt.Sprintf("Specialist: %s, Last seen: %v ago", qa.To, now.Sub(waiter.LastSeen)))
+				} else {
+					// Specialist is gone, this question is orphaned
+					LogWarn("AgentQA", "Question is orphaned - specialist no longer active",
+						fmt.Sprintf("Question: %s, Missing specialist: %s", qa.ID, qa.To))
+				}
+			}
+		}
+	}
 
 	// Check for active waiters with cancelled contexts
 	cancelledWaiters := 0
@@ -918,10 +969,10 @@ func (r *AgentQARegistry) checkSystemHealth() {
 	}
 
 	// Log overall health summary
-	if cancelledWaiters > 0 {
+	if cancelledWaiters > 0 || stuckQuestions > 0 {
 		LogWarn("AgentQA", "Health Summary",
-			fmt.Sprintf("Directories: %d, Active Waiters: %d, Cancelled Waiters: %d",
-				len(r.directories), len(r.activeWaiters), cancelledWaiters))
+			fmt.Sprintf("Directories: %d, Active Waiters: %d, Cancelled Waiters: %d, Stuck Questions: %d",
+				len(r.directories), len(r.activeWaiters), cancelledWaiters, stuckQuestions))
 	}
 }
 
