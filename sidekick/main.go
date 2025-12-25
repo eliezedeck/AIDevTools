@@ -363,14 +363,14 @@ func main() {
 
 	askSpecialistTool := mcp.NewTool(
 		"ask_specialist",
-		mcp.WithDescription("Ask a question to a specialist agent. Returns question ID immediately. If wait=true (default), blocks until answer is available. If wait=false, returns immediately with just the ID for later retrieval via get_answer."),
+		mcp.WithDescription("Ask a question to a specialist agent. IMPORTANT: Always call list_specialists first to verify a specialist exists for the specialty and root_dir, otherwise this call will fail. If wait=true (default), blocks until answer is available."),
 		mcp.WithString("specialty",
 			mcp.Required(),
-			mcp.Description("Specialty to ask (e.g., 'codebase', 'testing', 'security')"),
+			mcp.Description("Specialty to ask - must match an active specialist from list_specialists"),
 		),
 		mcp.WithString("root_dir",
 			mcp.Required(),
-			mcp.Description("Root directory of the project"),
+			mcp.Description("Root directory - must match an active specialist from list_specialists"),
 		),
 		mcp.WithString("question",
 			mcp.Required(),
@@ -386,7 +386,7 @@ func main() {
 
 	listSpecialistsTool := mcp.NewTool(
 		"list_specialists",
-		mcp.WithDescription("List all available specialist agents"),
+		mcp.WithDescription("List all active specialist agents. MUST be called before ask_specialist to verify a specialist is available for your specialty and root_dir."),
 	)
 
 	getAnswerTool := mcp.NewTool(
