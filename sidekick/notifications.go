@@ -10,11 +10,6 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
-// SpeakParams defines the input for the notifications_speak tool 🚀
-type SpeakParams struct {
-	Text string `json:"text" mcp:"Text to speak (max 50 words)"`
-}
-
 // NotificationEntry represents a notification in history
 type NotificationEntry struct {
 	Text      string    `json:"text"`

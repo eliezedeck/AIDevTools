@@ -50,6 +50,7 @@ type ProcessTracker struct {
 	Process       *exec.Cmd      `json:"-"`
 	StdinWriter   io.WriteCloser `json:"-"`
 	ExitCode      *int           `json:"exit_code,omitempty"`
+	CancelFunc    context.CancelFunc `json:"-"` // Cancel pending delayed spawns during shutdown
 	Mutex         sync.RWMutex   `json:"-"`
 }
 
@@ -77,6 +78,140 @@ const (
 	MaxSpawnDelay      = 300000           // 5 minutes max delay for spawn_process
 	DelayCheckInterval = 100              // Check process status every 100ms during delay
 )
+
+// Argument extraction helpers for MCP tool requests
+func getStringArg(request mcp.CallToolRequest, key, defaultVal string) string {
+	if arguments, ok := request.Params.Arguments.(map[string]any); ok {
+		if val, exists := arguments[key]; exists {
+			if str, ok := val.(string); ok {
+				return str
+			}
+		}
+	}
+	return defaultVal
+}
+
+func getIntArg(request mcp.CallToolRequest, key string, defaultVal int) int {
+	if arguments, ok := request.Params.Arguments.(map[string]any); ok {
+		if val, exists := arguments[key]; exists {
+			if f, ok := val.(float64); ok {
+				return int(f)
+			}
+		}
+	}
+	return defaultVal
+}
+
+func getInt64Arg(request mcp.CallToolRequest, key string, defaultVal int64) int64 {
+	if arguments, ok := request.Params.Arguments.(map[string]any); ok {
+		if val, exists := arguments[key]; exists {
+			if f, ok := val.(float64); ok {
+				return int64(f)
+			}
+		}
+	}
+	return defaultVal
+}
+
+func getBoolArg(request mcp.CallToolRequest, key string, defaultVal bool) bool {
+	if arguments, ok := request.Params.Arguments.(map[string]any); ok {
+		if val, exists := arguments[key]; exists {
+			if b, ok := val.(bool); ok {
+				return b
+			}
+		}
+	}
+	return defaultVal
+}
+
+func getStringArrayArg(request mcp.CallToolRequest, key string) []string {
+	if arguments, ok := request.Params.Arguments.(map[string]any); ok {
+		if argsInterface, exists := arguments[key]; exists {
+			if argsList, ok := argsInterface.([]any); ok {
+				result := make([]string, 0, len(argsList))
+				for _, arg := range argsList {
+					if argStr, ok := arg.(string); ok {
+						result = append(result, argStr)
+					}
+				}
+				return result
+			}
+		}
+	}
+	return []string{}
+}
+
+func getStringMapArg(request mcp.CallToolRequest, key string) map[string]string {
+	if arguments, ok := request.Params.Arguments.(map[string]any); ok {
+		if val, exists := arguments[key]; exists {
+			if envMap, ok := val.(map[string]any); ok {
+				result := make(map[string]string)
+				for k, v := range envMap {
+					if vStr, ok := v.(string); ok {
+						result[k] = vStr
+					}
+				}
+				return result
+			}
+		}
+	}
+	return map[string]string{}
+}
+
+func getFiltersArg(request mcp.CallToolRequest, key string) [][]string {
+	if arguments, ok := request.Params.Arguments.(map[string]any); ok {
+		if f, exists := arguments[key]; exists {
+			if filtersArray, ok := f.([]any); ok {
+				var filters [][]string
+				for _, filterInterface := range filtersArray {
+					if filterCmd, ok := filterInterface.([]any); ok {
+						var cmd []string
+						for _, arg := range filterCmd {
+							if argStr, ok := arg.(string); ok {
+								cmd = append(cmd, argStr)
+							}
+						}
+						if len(cmd) > 0 {
+							filters = append(filters, cmd)
+						}
+					}
+				}
+				return filters
+			}
+		}
+	}
+	return nil
+}
+
+// waitWithSmartDelay waits for the specified delay, but returns early if the process terminates.
+// Returns an error if the context is cancelled.
+func waitWithSmartDelay(ctx context.Context, tracker *ProcessTracker, delay time.Duration) error {
+	if delay <= 0 {
+		return nil
+	}
+
+	ticker := time.NewTicker(time.Duration(DelayCheckInterval) * time.Millisecond)
+	defer ticker.Stop()
+
+	remaining := delay
+	for remaining > 0 {
+		select {
+		case <-ticker.C:
+			tracker.Mutex.RLock()
+			status := tracker.Status
+			tracker.Mutex.RUnlock()
+
+			if status != StatusRunning && status != StatusPending {
+				return nil // Process terminated
+			}
+			remaining -= time.Duration(DelayCheckInterval) * time.Millisecond
+
+		case <-ctx.Done():
+			return fmt.Errorf("request canceled")
+		}
+	}
+	return nil
+}
 
 type RingBuffer struct {
 	data       []byte
@@ -411,6 +546,19 @@ func (r *ProcessRegistry) killProcessesBySession(sessionID string) int {
 
 // executeDelayedProcess actually starts the process after any delay
 func executeDelayedProcess(ctx context.Context, tracker *ProcessTracker, envVars map[string]string) error {
+	// Check if cancelled before starting (authoritative cancellation check)
+	select {
+	case <-ctx.Done():
+		tracker.Mutex.Lock()
+		if tracker.Status == StatusPending {
+			tracker.Status = StatusKilled
+		}
+		tracker.CancelFunc = nil // Clear since we're not pending anymore
+		tracker.Mutex.Unlock()
+		return fmt.Errorf("process cancelled before start: %w", ctx.Err())
+	default:
+	}
+
 	// Use background context for the process to avoid it being killed when request context is cancelled
 	cmd := exec.CommandContext(context.Background(), tracker.Command, tracker.Args...)
 	if tracker.WorkingDir != "" {
@@ -469,6 +617,7 @@ func executeDelayedProcess(ctx context.Context, tracker *ProcessTracker, envVars
 		tracker.PID = cmd.Process.Pid
 		tracker.StdinWriter = stdinPipe
 		tracker.Status = StatusRunning
+		tracker.CancelFunc = nil // Clear - process is now running, not pending
 
 		// Log process start
 		logMsg := fmt.Sprintf("Process started: %s", tracker.Command)
@@ -522,6 +671,7 @@ func executeDelayedProcess(ctx context.Context, tracker *ProcessTracker, envVars
 		tracker.PID = cmd.Process.Pid
 		tracker.StdinWriter = stdinPipe
 		tracker.Status = StatusRunning
+		tracker.CancelFunc = nil // Clear - process is now running, not pending
 
 		// Log process start
 		logMsg := fmt.Sprintf("Process started: %s", tracker.Command)
@@ -611,92 +761,23 @@ func handleSpawnProcess(ctx context.Context, request mcp.CallToolRequest) (*mcp.
 		return mcp.NewToolResultError("Missing or invalid 'command' argument"), nil
 	}
 
-	args := []string{}
-	if arguments, ok := request.Params.Arguments.(map[string]any); ok {
-		if argsInterface, exists := arguments["args"]; exists {
-			if argsList, ok := argsInterface.([]any); ok {
-				for _, arg := range argsList {
-					if argStr, ok := arg.(string); ok {
-						args = append(args, argStr)
-					}
-				}
-			}
-		}
-	}
+	args := getStringArrayArg(request, "args")
+	workingDir := getStringArg(request, "working_dir", "")
+	envVars := getStringMapArg(request, "env")
+	bufferSize := getInt64Arg(request, "buffer_size", DefaultBufferSize)
+	combineOutput := getBoolArg(request, "combine_output", false)
+	syncDelay := getBoolArg(request, "sync_delay", false)
+	name := getStringArg(request, "name", "")
 
-	workingDir := ""
-	if arguments, ok := request.Params.Arguments.(map[string]any); ok {
-		if wd, exists := arguments["working_dir"]; exists {
-			if wdStr, ok := wd.(string); ok {
-				workingDir = wdStr
-			}
-		}
+	// Handle delay with validation
+	delayMs := getInt64Arg(request, "delay", 0)
+	if delayMs > MaxSpawnDelay {
+		return mcp.NewToolResultError(fmt.Sprintf("Delay cannot exceed %d milliseconds (5 minutes)", MaxSpawnDelay)), nil
 	}
-
-	envVars := map[string]string{}
-	if arguments, ok := request.Params.Arguments.(map[string]any); ok {
-		if env, exists := arguments["env"]; exists {
-			if envMap, ok := env.(map[string]any); ok {
-				for k, v := range envMap {
-					if vStr, ok := v.(string); ok {
-						envVars[k] = vStr
-					}
-				}
-			}
-		}
+	if delayMs < 0 {
+		return mcp.NewToolResultError("Delay cannot be negative"), nil
 	}
-
-	bufferSize := int64(DefaultBufferSize)
-	if arguments, ok := request.Params.Arguments.(map[string]any); ok {
-		if bs, exists := arguments["buffer_size"]; exists {
-			if bsFloat, ok := bs.(float64); ok {
-				bufferSize = int64(bsFloat)
-			}
-		}
-	}
-
-	combineOutput := false
-	if arguments, ok := request.Params.Arguments.(map[string]any); ok {
-		if co, exists := arguments["combine_output"]; exists {
-			if coBool, ok := co.(bool); ok {
-				combineOutput = coBool
-			}
-		}
-	}
-
-	delay := time.Duration(0)
-	if arguments, ok := request.Params.Arguments.(map[string]any); ok {
-		if d, exists := arguments["delay"]; exists {
-			if dFloat, ok := d.(float64); ok {
-				delayMs := int64(dFloat)
-				if delayMs > MaxSpawnDelay {
-					return mcp.NewToolResultError(fmt.Sprintf("Delay cannot exceed %d milliseconds (5 minutes)", MaxSpawnDelay)), nil
-				}
-				if delayMs < 0 {
-					return mcp.NewToolResultError("Delay cannot be negative"), nil
-				}
-				delay = time.Duration(delayMs) * time.Millisecond
-			}
-		}
-	}
-
-	syncDelay := false
-	if arguments, ok := request.Params.Arguments.(map[string]any); ok {
-		if sd, exists := arguments["sync_delay"]; exists {
-			if sdBool, ok := sd.(bool); ok {
-				syncDelay = sdBool
-			}
-		}
-	}
-
-	name := ""
-	if arguments, ok := request.Params.Arguments.(map[string]any); ok {
-		if n, exists := arguments["name"]; exists {
-			if nStr, ok := n.(string); ok {
-				name = nStr
-			}
-		}
-	}
+	delay := time.Duration(delayMs) * time.Millisecond
 
 	// Extract session ID from context (for SSE mode)
 	sessionID := ExtractSessionFromContext(ctx)
@@ -752,6 +833,11 @@ func handleSpawnProcess(ctx context.Context, request mcp.CallToolRequest) (*mcp.
 		} else {
 			// Async mode: set pending status, register immediately, start background delay
 			tracker.Status = StatusPending
+
+			// Create cancellable context for the delayed spawn
+			delayCtx, cancelFunc := context.WithCancel(context.Background())
+			tracker.CancelFunc = cancelFunc
+
 			registry.addProcess(tracker)
 
 			// Add to session manager if in SSE mode
@@ -761,11 +847,20 @@ func handleSpawnProcess(ctx context.Context, request mcp.CallToolRequest) (*mcp.
 
 			// Start background goroutine to wait and then execute
 			go func() {
-				time.Sleep(delay)
-				if err := executeDelayedProcess(context.Background(), tracker, envVars); err != nil {
-					// Log error but don't fail - this is an async operation
-					// In production, this would be logged to a proper logger
-					// The error will be reflected in the process status
+				select {
+				case <-time.After(delay):
+					// Delay completed, execute the process
+					if err := executeDelayedProcess(delayCtx, tracker, envVars); err != nil {
+						// Log error but don't fail - this is an async operation
+						// The error will be reflected in the process status
+					}
+				case <-delayCtx.Done():
+					// Cancelled during delay (e.g., shutdown)
+					tracker.Mutex.Lock()
+					if tracker.Status == StatusPending {
+						tracker.Status = StatusKilled
+					}
+					tracker.Mutex.Unlock()
 				}
 			}()
 
@@ -829,6 +924,7 @@ func handleSpawnMultipleProcesses(ctx context.Context, request mcp.CallToolReque
 		envVars   map[string]string
 		name      string
 		processID string
+		ctx       context.Context
 	}
 
 	var deferredProcesses []processInfo
@@ -943,6 +1039,11 @@ func handleSpawnMultipleProcesses(ctx context.Context, request mcp.CallToolReque
 			// We're in deferred mode - add to deferred list
 			deferredMode = true
 			tracker.Status = StatusPending
+
+			// Create cancellable context for the deferred spawn
+			deferCtx, cancelFunc := context.WithCancel(context.Background())
+			tracker.CancelFunc = cancelFunc
+
 			registry.addProcess(tracker)
 
 			// Add to session manager if in SSE mode
@@ -956,6 +1057,7 @@ func handleSpawnMultipleProcesses(ctx context.Context, request mcp.CallToolReque
 				envVars:   envVars,
 				name:      name,
 				processID: processID,
+				ctx:       deferCtx,
 			})
 
 			results = append(results, map[string]any{
@@ -1004,24 +1106,38 @@ func handleSpawnMultipleProcesses(ctx context.Context, request mcp.CallToolReque
 	if len(deferredProcesses) > 0 {
 		go func() {
 			// Process each deferred process with its delay
-			for i, info := range deferredProcesses {
-				// For the first deferred process, use its original delay
-				// For subsequent ones, use their individual delays
-				if i == 0 {
-					// First deferred process - wait for its delay
-					if info.tracker.DelayStart > 0 {
-						time.Sleep(info.tracker.DelayStart)
+			for _, info := range deferredProcesses {
+				// Check if cancelled before waiting
+				select {
+				case <-info.ctx.Done():
+					// Cancelled during wait (e.g., shutdown)
+					info.tracker.Mutex.Lock()
+					if info.tracker.Status == StatusPending {
+						info.tracker.Status = StatusKilled
 					}
-				} else {
-					// Subsequent processes - wait for their individual delays
-					// This is the delay between this process and the previous one
-					if info.tracker.DelayStart > 0 {
-						time.Sleep(info.tracker.DelayStart)
+					info.tracker.Mutex.Unlock()
+					continue
+				default:
+				}
+
+				// Wait for the delay with cancellation support
+				if info.tracker.DelayStart > 0 {
+					select {
+					case <-time.After(info.tracker.DelayStart):
+						// Delay completed
+					case <-info.ctx.Done():
+						// Cancelled during delay (e.g., shutdown)
+						info.tracker.Mutex.Lock()
+						if info.tracker.Status == StatusPending {
+							info.tracker.Status = StatusKilled
+						}
+						info.tracker.Mutex.Unlock()
+						continue
 					}
 				}
 
 				// Execute the process
-				err := executeDelayedProcess(context.Background(), info.tracker, info.envVars)
+				err := executeDelayedProcess(info.ctx, info.tracker, info.envVars)
 				if err != nil {
 					// Process failed to start - update status
 					info.tracker.Mutex.Lock()
@@ -1053,94 +1169,28 @@ func handleGetPartialProcessOutput(ctx context.Context, request mcp.CallToolRequ
 		return mcp.NewToolResultError("Missing or invalid 'process_id' argument"), nil
 	}
 
-	streams := "both"
-	if arguments, ok := request.Params.Arguments.(map[string]any); ok {
-		if s, exists := arguments["streams"]; exists {
-			if sStr, ok := s.(string); ok {
-				streams = sStr
-			}
-		}
-	}
+	streams := getStringArg(request, "streams", "both")
+	maxLines := getIntArg(request, "max_lines", -1)
+	filters := getFiltersArg(request, "filters")
 
-	maxLines := -1
-	if arguments, ok := request.Params.Arguments.(map[string]any); ok {
-		if ml, exists := arguments["max_lines"]; exists {
-			if mlFloat, ok := ml.(float64); ok {
-				maxLines = int(mlFloat)
-			}
-		}
+	// Handle delay with validation
+	delayMs := getInt64Arg(request, "delay", 0)
+	if delayMs > MaxOutputDelay {
+		return mcp.NewToolResultError(fmt.Sprintf("Delay cannot exceed %d milliseconds (2 minutes)", MaxOutputDelay)), nil
 	}
-
-	// Parse filters parameter
-	var filters [][]string
-	if arguments, ok := request.Params.Arguments.(map[string]any); ok {
-		if f, exists := arguments["filters"]; exists {
-			if filtersArray, ok := f.([]any); ok {
-				for _, filterInterface := range filtersArray {
-					if filterCmd, ok := filterInterface.([]any); ok {
-						var cmd []string
-						for _, arg := range filterCmd {
-							if argStr, ok := arg.(string); ok {
-								cmd = append(cmd, argStr)
-							}
-						}
-						if len(cmd) > 0 {
-							filters = append(filters, cmd)
-						}
-					}
-				}
-			}
-		}
+	if delayMs < 0 {
+		return mcp.NewToolResultError("Delay cannot be negative"), nil
 	}
-
-	// Parse delay parameter
-	delay := time.Duration(0)
-	if arguments, ok := request.Params.Arguments.(map[string]any); ok {
-		if d, exists := arguments["delay"]; exists {
-			if dFloat, ok := d.(float64); ok {
-				delayMs := int64(dFloat)
-				if delayMs > MaxOutputDelay {
-					return mcp.NewToolResultError(fmt.Sprintf("Delay cannot exceed %d milliseconds (2 minutes)", MaxOutputDelay)), nil
-				}
-				if delayMs < 0 {
-					return mcp.NewToolResultError("Delay cannot be negative"), nil
-				}
-				delay = time.Duration(delayMs) * time.Millisecond
-			}
-		}
-	}
+	delay := time.Duration(delayMs) * time.Millisecond
 
 	tracker, exists := registry.getProcess(processID)
 	if !exists {
 		return mcp.NewToolResultError(fmt.Sprintf("Process %s not found", processID)), nil
 	}
 
-	// Implement smart delay logic
-	if delay > 0 {
-		ticker := time.NewTicker(time.Duration(DelayCheckInterval) * time.Millisecond)
-		defer ticker.Stop()
-
-		remaining := delay
-	delayLoop:
-		for remaining > 0 {
-			select {
-			case <-ticker.C:
-				// Check if process has terminated
-				tracker.Mutex.RLock()
-				status := tracker.Status
-				tracker.Mutex.RUnlock()
-
-				if status != StatusRunning && status != StatusPending {
-					// Process terminated, exit delay loop
-					break delayLoop
-				}
-				remaining -= time.Duration(DelayCheckInterval) * time.Millisecond
-
-			case <-ctx.Done():
-				// Context canceled
-				return mcp.NewToolResultError("Request canceled"), nil
-			}
-		}
+	// Wait with smart delay (returns early if process terminates)
+	if err := waitWithSmartDelay(ctx, tracker, delay); err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
 	}
 
 	tracker.Mutex.Lock()
@@ -1249,94 +1299,28 @@ func handleGetFullProcessOutput(ctx context.Context, request mcp.CallToolRequest
 		return mcp.NewToolResultError("Missing or invalid 'process_id' argument"), nil
 	}
 
-	streams := "both"
-	if arguments, ok := request.Params.Arguments.(map[string]any); ok {
-		if s, exists := arguments["streams"]; exists {
-			if sStr, ok := s.(string); ok {
-				streams = sStr
-			}
-		}
-	}
+	streams := getStringArg(request, "streams", "both")
+	maxLines := getIntArg(request, "max_lines", -1)
+	filters := getFiltersArg(request, "filters")
 
-	maxLines := -1
-	if arguments, ok := request.Params.Arguments.(map[string]any); ok {
-		if ml, exists := arguments["max_lines"]; exists {
-			if mlFloat, ok := ml.(float64); ok {
-				maxLines = int(mlFloat)
-			}
-		}
+	// Handle delay with validation
+	delayMs := getInt64Arg(request, "delay", 0)
+	if delayMs > MaxOutputDelay {
+		return mcp.NewToolResultError(fmt.Sprintf("Delay cannot exceed %d milliseconds (2 minutes)", MaxOutputDelay)), nil
 	}
-
-	// Parse filters parameter
-	var filters [][]string
-	if arguments, ok := request.Params.Arguments.(map[string]any); ok {
-		if f, exists := arguments["filters"]; exists {
-			if filtersArray, ok := f.([]any); ok {
-				for _, filterInterface := range filtersArray {
-					if filterCmd, ok := filterInterface.([]any); ok {
-						var cmd []string
-						for _, arg := range filterCmd {
-							if argStr, ok := arg.(string); ok {
-								cmd = append(cmd, argStr)
-							}
-						}
-						if len(cmd) > 0 {
-							filters = append(filters, cmd)
-						}
-					}
-				}
-			}
-		}
+	if delayMs < 0 {
+		return mcp.NewToolResultError("Delay cannot be negative"), nil
 	}
-
-	// Parse delay parameter
-	delay := time.Duration(0)
-	if arguments, ok := request.Params.Arguments.(map[string]any); ok {
-		if d, exists := arguments["delay"]; exists {
-			if dFloat, ok := d.(float64); ok {
-				delayMs := int64(dFloat)
-				if delayMs > MaxOutputDelay {
-					return mcp.NewToolResultError(fmt.Sprintf("Delay cannot exceed %d milliseconds (2 minutes)", MaxOutputDelay)), nil
-				}
-				if delayMs < 0 {
-					return mcp.NewToolResultError("Delay cannot be negative"), nil
-				}
-				delay = time.Duration(delayMs) * time.Millisecond
-			}
-		}
-	}
+	delay := time.Duration(delayMs) * time.Millisecond
 
 	tracker, exists := registry.getProcess(processID)
 	if !exists {
 		return mcp.NewToolResultError(fmt.Sprintf("Process %s not found", processID)), nil
 	}
 
-	// Implement smart delay logic
-	if delay > 0 {
-		ticker := time.NewTicker(time.Duration(DelayCheckInterval) * time.Millisecond)
-		defer ticker.Stop()
-
-		remaining := delay
-	delayLoop:
-		for remaining > 0 {
-			select {
-			case <-ticker.C:
-				// Check if process has terminated
-				tracker.Mutex.RLock()
-				status := tracker.Status
-				tracker.Mutex.RUnlock()
-
-				if status != StatusRunning && status != StatusPending {
-					// Process terminated, exit delay loop
-					break delayLoop
-				}
-				remaining -= time.Duration(DelayCheckInterval) * time.Millisecond
-
-			case <-ctx.Done():
-				// Context canceled
-				return mcp.NewToolResultError("Request canceled"), nil
-			}
-		}
+	// Wait with smart delay (returns early if process terminates)
+	if err := waitWithSmartDelay(ctx, tracker, delay); err != nil {
+		return mcp.NewToolResultError(err.Error()), nil
 	}
 
 	tracker.Mutex.Lock()
@@ -1467,15 +1451,7 @@ func handleSendProcessInput(ctx context.Context, request mcp.CallToolRequest) (*
 		return mcp.NewToolResultError("Missing or invalid 'input' argument"), nil
 	}
 
-	// Extract auto_newline parameter (defaults to true)
-	autoNewline := true
-	if arguments, ok := request.Params.Arguments.(map[string]any); ok {
-		if an, exists := arguments["auto_newline"]; exists {
-			if anBool, ok := an.(bool); ok {
-				autoNewline = anBool
-			}
-		}
-	}
+	autoNewline := getBoolArg(request, "auto_newline", true)
 
 	tracker, exists := registry.getProcess(processID)
 	if !exists {

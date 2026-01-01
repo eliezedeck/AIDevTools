@@ -118,7 +118,7 @@ func (t *TUIApp) handleSignals() {
 		// External signal received (SIGINT, SIGTERM, etc.)
 		t.shutdownOnce.Do(func() {
 			// Mark TUI as inactive immediately
-			setTUIActive(false)
+			tuiState.SetActive(false)
 			// Stop the TUI application
 			t.Stop()
 		})
@@ -172,7 +172,7 @@ func (t *TUIApp) handleGlobalKeys(event *tcell.EventKey) *tcell.EventKey {
 			// Show quit confirmation dialog
 			ShowQuitConfirmation(t.app, t.pages, func() {
 				// User confirmed quit - mark TUI as inactive immediately
-				setTUIActive(false)
+				tuiState.SetActive(false)
 				t.Stop()
 			})
 			return nil
@@ -185,7 +185,7 @@ func (t *TUIApp) handleGlobalKeys(event *tcell.EventKey) *tcell.EventKey {
 			// Show quit confirmation dialog
 			ShowQuitConfirmation(t.app, t.pages, func() {
 				// User confirmed quit - mark TUI as inactive immediately
-				setTUIActive(false)
+				tuiState.SetActive(false)
 				t.Stop()
 			})
 		}
@@ -304,7 +304,7 @@ func (t *TUIApp) startStateWatchdog() {
 		select {
 		case <-ticker.C:
 			// Check if TUI state has been active for too long without proper shutdown
-			if isTUIActiveCheck() {
+			if tuiState.IsActive() {
 				// TUI is marked as active - this is normal during operation
 				// The watchdog is mainly for detecting stuck states after crashes
 				// We don't reset here as it would interfere with normal operation
@@ -321,7 +321,7 @@ func (t *TUIApp) checkRecoveryMode() {
 	time.Sleep(2 * time.Second)
 
 	// Check if we're in recovery mode (TUI was crashed and restarted)
-	if isTUICrashed() || isTUIRecovering() {
+	if tuiState.IsCrashed() || tuiState.IsRecovering() {
 		// Auto-navigate to logs page to show the user what went wrong
 		t.app.QueueUpdateDraw(func() {
 			t.SwitchToPage(LogsPage)
@@ -334,7 +334,7 @@ func (t *TUIApp) checkRecoveryMode() {
 		})
 
 		// Clear the crashed state since we've handled it
-		setTUICrashed(false)
+		tuiState.SetCrashed(false)
 	}
 }
 
@@ -520,7 +520,7 @@ func (t *TUIApp) Stop() {
 	defer func() {
 		if r := recover(); r != nil {
 			// Panic during stop - force terminal reset
-			setTUIActive(false)
+			tuiState.SetActive(false)
 			ForceTerminalReset()
 			EmergencyLog("TUI", "Panic during TUI stop", fmt.Sprintf("%v", r))
 		}

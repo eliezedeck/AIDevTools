@@ -86,7 +86,7 @@ func (l *Logger) Log(level LogLevel, source, message string, details ...string) 
 	}
 
 	// Output to console if enabled and not in TUI mode
-	if l.consoleOutput && !isTUIActiveCheck() {
+	if l.consoleOutput && !tuiState.IsActive() {
 		timestamp := entry.Timestamp.Format("15:04:05")
 		levelStr := entry.Level.String()
 

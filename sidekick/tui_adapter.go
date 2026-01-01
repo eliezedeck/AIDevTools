@@ -44,8 +44,8 @@ func (tm *TUIManager) Start() error {
 // handleTUICrash handles TUI crashes with proper cleanup and auto-recovery
 func (tm *TUIManager) handleTUICrash(panicValue interface{}) {
 	// Mark TUI as inactive and crashed immediately
-	setTUIActive(false)
-	setTUICrashed(true)
+	tuiState.SetActive(false)
+	tuiState.SetCrashed(true)
 
 	// Force terminal reset to restore normal terminal state
 	ForceTerminalReset()
@@ -113,8 +113,8 @@ func StartTUIIfEnabled() *TUIManager {
 		defer func() {
 			if r := recover(); r != nil {
 				// Panic in TUI startup - perform emergency cleanup
-				setTUIActive(false)
-				setTUICrashed(true)
+				tuiState.SetActive(false)
+				tuiState.SetCrashed(true)
 				ForceTerminalReset()
 				EmergencyLog("TUI", "TUI startup failed with panic", fmt.Sprintf("%v", r))
 
@@ -132,8 +132,8 @@ func StartTUIIfEnabled() *TUIManager {
 
 		if err := tuiManager.Start(); err != nil {
 			// TUI error occurred - ensure proper cleanup
-			setTUIActive(false)
-			setTUICrashed(true)
+			tuiState.SetActive(false)
+			tuiState.SetCrashed(true)
 			ForceTerminalReset()
 			EmergencyLog("TUI", "TUI failed to start", err.Error())
 

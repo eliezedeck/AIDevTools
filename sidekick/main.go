@@ -28,64 +28,61 @@ var globalTUIManager *TUIManager
 var shutdownChan = make(chan struct{})
 var shutdownOnce sync.Once
 
-// TUI state tracking for mutual exclusivity with logging
-var (
-	isTUIActive   bool
-	tuiCrashed    bool
-	tuiRecovering bool
-	tuiMutex      sync.RWMutex
-)
-
-// setTUIActive safely sets the TUI active state
-func setTUIActive(active bool) {
-	tuiMutex.Lock()
-	defer tuiMutex.Unlock()
-	isTUIActive = active
+// TUIState manages TUI state for mutual exclusivity with logging
+type TUIState struct {
+	active     bool
+	crashed    bool
+	recovering bool
+	mu         sync.RWMutex
 }
 
-// isTUIActiveCheck safely checks if TUI is active
-func isTUIActiveCheck() bool {
-	tuiMutex.RLock()
-	defer tuiMutex.RUnlock()
-	return isTUIActive
+// Global TUI state instance
+var tuiState = &TUIState{}
+
+func (t *TUIState) SetActive(active bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.active = active
 }
 
-// setTUICrashed safely sets the TUI crashed state
-func setTUICrashed(crashed bool) {
-	tuiMutex.Lock()
-	defer tuiMutex.Unlock()
-	tuiCrashed = crashed
+func (t *TUIState) IsActive() bool {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.active
 }
 
-// isTUICrashed safely checks if TUI has crashed
-func isTUICrashed() bool {
-	tuiMutex.RLock()
-	defer tuiMutex.RUnlock()
-	return tuiCrashed
+func (t *TUIState) SetCrashed(crashed bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.crashed = crashed
 }
 
-// setTUIRecovering safely sets the TUI recovering state
-func setTUIRecovering(recovering bool) {
-	tuiMutex.Lock()
-	defer tuiMutex.Unlock()
-	tuiRecovering = recovering
+func (t *TUIState) IsCrashed() bool {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.crashed
 }
 
-// isTUIRecovering safely checks if TUI is in recovery mode
-func isTUIRecovering() bool {
-	tuiMutex.RLock()
-	defer tuiMutex.RUnlock()
-	return tuiRecovering
+func (t *TUIState) SetRecovering(recovering bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.recovering = recovering
+}
+
+func (t *TUIState) IsRecovering() bool {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.recovering
 }
 
 // attemptTUIRecovery attempts to restart TUI after a crash with auto-navigation to logs
 func attemptTUIRecovery() {
-	if isTUIRecovering() {
+	if tuiState.IsRecovering() {
 		return // Already attempting recovery
 	}
 
-	setTUIRecovering(true)
-	defer setTUIRecovering(false)
+	tuiState.SetRecovering(true)
+	defer tuiState.SetRecovering(false)
 
 	EmergencyLog("TUI", "Attempting TUI auto-recovery after crash...")
 
@@ -100,8 +97,8 @@ func attemptTUIRecovery() {
 		defer func() {
 			if r := recover(); r != nil {
 				// Recovery failed - don't try again
-				setTUIActive(false)
-				setTUICrashed(true)
+				tuiState.SetActive(false)
+				tuiState.SetCrashed(true)
 				ForceTerminalReset()
 				EmergencyLog("TUI", "TUI recovery failed", fmt.Sprintf("Recovery panic: %v", r))
 				return
@@ -110,19 +107,19 @@ func attemptTUIRecovery() {
 
 		// Small delay before recovery attempt
 		time.Sleep(500 * time.Millisecond)
-		setTUIActive(true)
-		setTUICrashed(false)
+		tuiState.SetActive(true)
+		tuiState.SetCrashed(false)
 
 		// Log the recovery attempt
 		LogError("TUI", "TUI crashed and is being recovered - switching to logs page")
 
 		if err := recoveryManager.Start(); err != nil {
-			setTUIActive(false)
-			setTUICrashed(true)
+			tuiState.SetActive(false)
+			tuiState.SetCrashed(true)
 			ForceTerminalReset()
 			EmergencyLog("TUI", "TUI recovery failed to start", err.Error())
 		} else {
-			setTUIActive(false)
+			tuiState.SetActive(false)
 			LogInfo("TUI", "TUI recovery completed successfully")
 		}
 
@@ -438,8 +435,8 @@ func main() {
 				defer func() {
 					if r := recover(); r != nil {
 						// TUI startup panic - perform emergency cleanup
-						setTUIActive(false)
-						setTUICrashed(true)
+						tuiState.SetActive(false)
+						tuiState.SetCrashed(true)
 						ForceTerminalReset()
 						EmergencyLog("TUI", "TUI startup panic", fmt.Sprintf("%v", r))
 
@@ -452,12 +449,12 @@ func main() {
 
 				// Small delay to ensure SSE server is started first
 				time.Sleep(200 * time.Millisecond)
-				setTUIActive(true)
+				tuiState.SetActive(true)
 
 				if err := tuiManager.Start(); err != nil {
 					// TUI failed to start - ensure proper cleanup
-					setTUIActive(false)
-					setTUICrashed(true)
+					tuiState.SetActive(false)
+					tuiState.SetCrashed(true)
 					ForceTerminalReset()
 					EmergencyLog("TUI", "TUI failed to start", err.Error())
 
@@ -467,7 +464,7 @@ func main() {
 					return
 				} else {
 					// TUI exited normally
-					setTUIActive(false)
+					tuiState.SetActive(false)
 					LogInfo("TUI", "TUI exited normally")
 				}
 
@@ -529,178 +526,145 @@ func main() {
 	}
 }
 
+// getRunningProcesses returns all currently running or pending processes
+// This includes pending delayed spawns that haven't started yet
+func getRunningProcesses() []*ProcessTracker {
+	processes := registry.getAllProcesses()
+	var running []*ProcessTracker
+	for _, tracker := range processes {
+		tracker.Mutex.RLock()
+		status := tracker.Status
+		tracker.Mutex.RUnlock()
+
+		if status == StatusRunning || status == StatusPending {
+			running = append(running, tracker)
+		}
+	}
+	return running
+}
+
+// terminateProcesses sends SIGTERM to running processes and cancels pending delayed spawns
+func terminateProcesses(processes []*ProcessTracker) {
+	for _, tracker := range processes {
+		tracker.Mutex.RLock()
+		hasProcess := tracker.Process != nil && tracker.Process.Process != nil
+		cancelFunc := tracker.CancelFunc
+		tracker.Mutex.RUnlock()
+
+		if hasProcess {
+			// Running process - send SIGTERM
+			tracker.Mutex.RLock()
+			err := terminateProcessGroup(tracker.Process.Process.Pid)
+			if err != nil {
+				if killErr := tracker.Process.Process.Kill(); killErr != nil {
+					// Process may already be dead
+				}
+			}
+			tracker.Mutex.RUnlock()
+		} else if cancelFunc != nil {
+			// Pending delayed spawn - cancel it
+			cancelFunc()
+		}
+	}
+}
+
+// forceKillProcesses sends SIGKILL to running processes and cancels pending delayed spawns
+func forceKillProcesses(processes []*ProcessTracker) {
+	for _, tracker := range processes {
+		tracker.Mutex.Lock()
+		if tracker.Process != nil && tracker.Process.Process != nil &&
+			(tracker.Status == StatusRunning || tracker.Status == StatusPending) {
+			// Running process - force kill
+			err := forceKillProcessGroup(tracker.Process.Process.Pid)
+			if err != nil {
+				if killErr := tracker.Process.Process.Kill(); killErr != nil {
+					// Process may already be dead
+				}
+			}
+			tracker.Status = StatusKilled
+		} else if tracker.Status == StatusPending && tracker.CancelFunc != nil {
+			// Pending delayed spawn - cancel and mark as killed
+			tracker.CancelFunc()
+			tracker.Status = StatusKilled
+		}
+		tracker.Mutex.Unlock()
+	}
+}
+
+// countRunningProcesses returns how many of the provided processes are still running
+func countRunningProcesses(processes []*ProcessTracker) int {
+	count := 0
+	for _, tracker := range processes {
+		tracker.Mutex.RLock()
+		if tracker.Status == StatusRunning || tracker.Status == StatusPending {
+			count++
+		}
+		tracker.Mutex.RUnlock()
+	}
+	return count
+}
+
 // handleTUIShutdown performs graceful shutdown with UI feedback
 func handleTUIShutdown(tuiApp *TUIApp) {
-	// Stop the cleanup routine first
 	StopCleanupRoutine()
 
-	// Create and show shutdown modal
 	modal := NewShutdownModal(tuiApp.app)
 	modal.Show(tuiApp.pages)
 
-	// Get all tracked processes
-	processes := registry.getAllProcesses()
-
-	// Filter to only running processes
-	var runningProcesses []*ProcessTracker
-	for _, tracker := range processes {
-		tracker.Mutex.RLock()
-		if tracker.Process != nil && tracker.Process.Process != nil &&
-			(tracker.Status == StatusRunning || tracker.Status == StatusPending) {
-			runningProcesses = append(runningProcesses, tracker)
-		}
-		tracker.Mutex.RUnlock()
-	}
-
+	runningProcesses := getRunningProcesses()
 	totalProcesses := len(runningProcesses)
+
 	if totalProcesses == 0 {
-		// No processes to terminate
 		modal.UpdateProgress(0, 0)
-		time.Sleep(100 * time.Millisecond) // Brief pause to show the modal
+		time.Sleep(100 * time.Millisecond)
 		return
 	}
 
-	// Initial modal update
 	modal.UpdateProgress(totalProcesses, totalProcesses)
+	terminateProcesses(runningProcesses)
 
-	// Send SIGTERM to all running processes
-	for _, tracker := range runningProcesses {
-		tracker.Mutex.RLock()
-		if tracker.Process != nil && tracker.Process.Process != nil {
-			// Send graceful termination signal
-			err := terminateProcessGroup(tracker.Process.Process.Pid)
-			if err != nil {
-				// If platform-specific termination fails, use standard process.Kill()
-				if killErr := tracker.Process.Process.Kill(); killErr != nil {
-					// Both termination methods failed - process may already be dead
-					// This is expected in some cases, so we don't propagate the error
-				}
-			}
-		}
-		tracker.Mutex.RUnlock()
-	}
-
-	// Give processes up to 3 seconds to terminate gracefully
+	// Wait up to 3 seconds with progress updates
 	deadline := time.Now().Add(3 * time.Second)
-	checkInterval := 100 * time.Millisecond
-	ticker := time.NewTicker(checkInterval)
+	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 
 	for time.Now().Before(deadline) {
 		<-ticker.C
-		// Count remaining processes
-		remainingCount := 0
-		for _, tracker := range runningProcesses {
-			tracker.Mutex.RLock()
-			if tracker.Status == StatusRunning || tracker.Status == StatusPending {
-				remainingCount++
-			}
-			tracker.Mutex.RUnlock()
-		}
-
-		// Update modal
-		modal.UpdateProgress(remainingCount, totalProcesses)
-
-		if remainingCount == 0 {
-			// All processes terminated
-			time.Sleep(200 * time.Millisecond) // Brief pause to show success
+		remaining := countRunningProcesses(runningProcesses)
+		modal.UpdateProgress(remaining, totalProcesses)
+		if remaining == 0 {
+			time.Sleep(200 * time.Millisecond)
 			return
 		}
 	}
 
-	// Force kill any remaining processes
-	remainingCount := 0
-	for _, tracker := range runningProcesses {
-		tracker.Mutex.Lock()
-		if tracker.Process != nil && tracker.Process.Process != nil &&
-			(tracker.Status == StatusRunning || tracker.Status == StatusPending) {
-			// Force kill the entire process group (Unix) or process (Windows)
-			err := forceKillProcessGroup(tracker.Process.Process.Pid)
-			if err != nil {
-				// If platform-specific force kill fails, use standard process.Kill()
-				if killErr := tracker.Process.Process.Kill(); killErr != nil {
-					// Process may already be dead - this is expected during shutdown
-				}
-			}
-			tracker.Status = StatusKilled
-			remainingCount++
-		}
-		tracker.Mutex.Unlock()
-	}
-
-	// Final update showing force kill
-	if remainingCount > 0 {
-		modal.UpdateProgress(0, totalProcesses)
-		time.Sleep(300 * time.Millisecond) // Show final state briefly
-	}
+	// Force kill remaining
+	forceKillProcesses(runningProcesses)
+	modal.UpdateProgress(0, totalProcesses)
+	time.Sleep(300 * time.Millisecond)
 }
 
 // handleGracefulShutdown sends SIGTERM to all running processes, waits up to 5 seconds,
 // then sends SIGKILL to any remaining processes
 func handleGracefulShutdown() {
-	// Stop the cleanup routine first
 	StopCleanupRoutine()
 
-	// Get all tracked processes
-	processes := registry.getAllProcesses()
-
-	// Send termination signal to all running process groups
-	for _, tracker := range processes {
-		tracker.Mutex.RLock()
-		if tracker.Process != nil && tracker.Process.Process != nil &&
-			(tracker.Status == StatusRunning || tracker.Status == StatusPending) {
-			// Terminate the entire process group (Unix) or process (Windows)
-			err := terminateProcessGroup(tracker.Process.Process.Pid)
-			if err != nil {
-				// If platform-specific termination fails, use standard process.Kill()
-				if killErr := tracker.Process.Process.Kill(); killErr != nil {
-					// Process termination failed - may already be dead
-				}
-			}
-		}
-		tracker.Mutex.RUnlock()
+	runningProcesses := getRunningProcesses()
+	if len(runningProcesses) == 0 {
+		return
 	}
 
-	// Give processes up to 5 seconds to terminate gracefully
+	terminateProcesses(runningProcesses)
+
+	// Wait up to 5 seconds for graceful termination
 	deadline := time.Now().Add(5 * time.Second)
-	checkInterval := 100 * time.Millisecond
-
 	for time.Now().Before(deadline) {
-		allTerminated := true
-
-		for _, tracker := range processes {
-			tracker.Mutex.RLock()
-			if tracker.Status == StatusRunning || tracker.Status == StatusPending {
-				allTerminated = false
-			}
-			tracker.Mutex.RUnlock()
-
-			if !allTerminated {
-				break
-			}
-		}
-
-		if allTerminated {
+		if countRunningProcesses(runningProcesses) == 0 {
 			return
 		}
-
-		time.Sleep(checkInterval)
+		time.Sleep(100 * time.Millisecond)
 	}
 
-	// Force kill any remaining process groups
-	for _, tracker := range processes {
-		tracker.Mutex.RLock()
-		if tracker.Process != nil && tracker.Process.Process != nil &&
-			(tracker.Status == StatusRunning || tracker.Status == StatusPending) {
-			// Force kill the entire process group (Unix) or process (Windows)
-			err := forceKillProcessGroup(tracker.Process.Process.Pid)
-			if err != nil {
-				// If platform-specific force kill fails, use standard process.Kill()
-				if killErr := tracker.Process.Process.Kill(); killErr != nil {
-					// Final kill attempt failed - process likely already terminated
-				}
-			}
-		}
-		tracker.Mutex.RUnlock()
-	}
+	// Force kill remaining
+	forceKillProcesses(runningProcesses)
 }

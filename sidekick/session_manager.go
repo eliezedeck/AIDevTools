@@ -36,44 +36,9 @@ var sessionManager = &SessionManager{
 	sessions: make(map[string]*Session),
 }
 
-// GetSessionFromContext extracts session ID from the request context
-func GetSessionFromContext(ctx context.Context) string {
-	// In SSE mode, the session ID is provided by the SSE server
-	// We'll need to extract it from the context
-	if globalSSEServer != nil {
-		// The SSE server should provide session ID in the context
-		// This will be implemented based on how mark3labs/mcp-go handles it
-		if sessionID, ok := ctx.Value("sessionID").(string); ok {
-			return sessionID
-		}
-	}
-	return ""
-}
-
-// CreateSession creates a new session
+// CreateSession creates a new session (alias for EnsureSessionExists for backward compatibility)
 func (sm *SessionManager) CreateSession(sessionID string) *Session {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-
-	// Check if session already exists
-	if _, exists := sm.sessions[sessionID]; exists {
-		return sm.sessions[sessionID]
-	}
-
-	// Create a long-lived context for this session
-	ctx, cancel := context.WithCancel(context.Background())
-
-	session := &Session{
-		ID:        sessionID,
-		Status:    SessionConnected,
-		Processes: []string{},
-		Context:   ctx,
-		Cancel:    cancel,
-	}
-
-	sm.sessions[sessionID] = session
-	LogInfo("Session", "New session created", fmt.Sprintf("SessionID: %s", sessionID))
-	return session
+	return sm.EnsureSessionExists(sessionID)
 }
 
 // GetSession retrieves a session by ID
@@ -237,6 +202,6 @@ func (sm *SessionManager) EnsureSessionExists(sessionID string) *Session {
 	}
 
 	sm.sessions[sessionID] = session
-	LogInfo("Session", "Session auto-created from context", fmt.Sprintf("SessionID: %s", sessionID))
+	LogInfo("Session", "Session created", fmt.Sprintf("SessionID: %s", sessionID))
 	return session
 }

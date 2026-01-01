@@ -57,7 +57,7 @@ func StartSSEServer(mcpServer *server.MCPServer, config SSEServerConfig) error {
 		LogInfo("SSEServer", "Shutting down SSE server...")
 
 		// If TUI is active, use graceful shutdown with UI feedback
-		if isTUIActiveCheck() && globalTUIManager != nil && globalTUIManager.app != nil {
+		if tuiState.IsActive() && globalTUIManager != nil && globalTUIManager.app != nil {
 			// Graceful shutdown for TUI mode with modal UI
 			handleTUIShutdown(globalTUIManager.app)
 

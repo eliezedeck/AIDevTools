@@ -57,11 +57,10 @@ type SpecialistDirectory struct {
 
 // ActiveWaiter tracks an active specialist waiting for questions
 type ActiveWaiter struct {
-	Name       string
-	Context    context.Context
-	Cancel     context.CancelFunc
-	LastSeen   time.Time
-	ChannelGen int64 // Generation number for channel recreation detection
+	Name     string
+	Context  context.Context
+	Cancel   context.CancelFunc
+	LastSeen time.Time
 }
 
 // AgentQARegistry manages Q&A exchanges and specialist registrations
@@ -83,12 +82,8 @@ func NewAgentQARegistry() *AgentQARegistry {
 		waiters:       make(map[string]chan *QuestionAnswer),
 		activeWaiters: make(map[string]*ActiveWaiter),
 	}
-	// Start cleanup routine for expired Q&A entries
-	r.startCleanupRoutine()
-	// Start waiter cleanup routine for orphaned specialists
-	r.startWaiterCleanupRoutine()
-	// Start health monitoring routine
-	r.startHealthMonitoringRoutine()
+	// Start unified maintenance routine
+	r.startMaintenanceRoutine()
 	return r
 }
 
@@ -135,8 +130,10 @@ func (r *AgentQARegistry) ListDirectories() []*SpecialistDirectory {
 	return dirs
 }
 
-// AskQuestion submits a question to a specialist directory
-func (r *AgentQARegistry) AskQuestion(from, specialty, rootDir, question string, timeout time.Duration) (*QuestionAnswer, error) {
+// askQuestionInternal is the core implementation for submitting questions to specialists.
+// If wait is true, blocks until answer is available (respecting timeout).
+// If wait is false, returns immediately with the question ID.
+func (r *AgentQARegistry) askQuestionInternal(from, specialty, rootDir, question string, wait bool, timeout time.Duration) (*QuestionAnswer, error) {
 	r.mutex.Lock()
 
 	// Create directory key to find the specific directory
@@ -226,25 +223,58 @@ func (r *AgentQARegistry) AskQuestion(from, specialty, rootDir, question string,
 		return qa, fmt.Errorf(qa.Error)
 	}
 
+	// Return immediately if not waiting for response
+	if !wait {
+		return qa, nil
+	}
+
 	// Wait for response with timeout
 	if timeout == 0 {
 		// No timeout - wait indefinitely
-		updatedQA := <-responseChan
-		return updatedQA, nil
-	} else {
-		// With timeout
-		select {
-		case updatedQA := <-responseChan:
-			return updatedQA, nil
-		case <-time.After(timeout):
-			r.mutex.Lock()
-			qa.Status = QAStatusTimeout
-			qa.Error = "Timeout waiting for response"
-			delete(r.waiters, qa.ID)
-			r.mutex.Unlock()
-			return qa, fmt.Errorf("timeout waiting for response")
+		updatedQA, ok := <-responseChan
+		if !ok {
+			// Channel was closed (session disconnected or cleanup)
+			r.mutex.RLock()
+			currentQA := r.qaHistory[qa.ID]
+			r.mutex.RUnlock()
+			if currentQA != nil {
+				return currentQA, fmt.Errorf("response channel closed - session disconnected")
+			}
+			return qa, fmt.Errorf("response channel closed - session disconnected")
 		}
+		return updatedQA, nil
 	}
+	// With timeout
+	select {
+	case updatedQA, ok := <-responseChan:
+		if !ok {
+			// Channel was closed
+			r.mutex.RLock()
+			currentQA := r.qaHistory[qa.ID]
+			r.mutex.RUnlock()
+			if currentQA != nil {
+				return currentQA, fmt.Errorf("response channel closed - session disconnected")
+			}
+			return qa, fmt.Errorf("response channel closed - session disconnected")
+		}
+		return updatedQA, nil
+	case <-time.After(timeout):
+		r.mutex.Lock()
+		qa.Status = QAStatusTimeout
+		qa.Error = "Timeout waiting for response"
+		// Close and delete waiter channel to disallow late answers
+		if waiter, exists := r.waiters[qa.ID]; exists {
+			close(waiter)
+			delete(r.waiters, qa.ID)
+		}
+		r.mutex.Unlock()
+		return qa, fmt.Errorf("timeout waiting for response")
+	}
+}
+
+// AskQuestion submits a question to a specialist directory and waits for a response
+func (r *AgentQARegistry) AskQuestion(from, specialty, rootDir, question string, timeout time.Duration) (*QuestionAnswer, error) {
+	return r.askQuestionInternal(from, specialty, rootDir, question, true, timeout)
 }
 
 // WaitForQuestion waits for a question for a specialist (blocking)
@@ -293,10 +323,20 @@ func (r *AgentQARegistry) WaitForQuestionWithContext(ctx context.Context, name, 
 						case queue <- qa:
 							LogInfo("AgentQA", fmt.Sprintf("Requeued orphaned question %s for directory '%s'", qa.ID, dirKey))
 						default:
-							// Queue is full, mark as failed
+							// Queue is full, mark as failed and notify waiter
 							qa.Status = QAStatusFailed
 							qa.Error = "Failed to requeue after specialist disconnection - queue full"
 							LogError("AgentQA", "Failed to requeue orphaned question", fmt.Sprintf("Question: %s, Directory: %s", qa.ID, dirKey))
+
+							// Notify the waiting asker so they don't hang indefinitely
+							if waiter, waiterExists := r.waiters[qa.ID]; waiterExists {
+								select {
+								case waiter <- qa:
+								default:
+								}
+								close(waiter)
+								delete(r.waiters, qa.ID)
+							}
 						}
 					}
 				}
@@ -350,11 +390,10 @@ func (r *AgentQARegistry) WaitForQuestionWithContext(ctx context.Context, name, 
 
 	// Register this specialist as an active waiter
 	r.activeWaiters[dirKey] = &ActiveWaiter{
-		Name:       name,
-		Context:    waiterCtx,
-		Cancel:     waiterCancel,
-		LastSeen:   time.Now(),
-		ChannelGen: time.Now().UnixNano(), // Use timestamp as generation
+		Name:     name,
+		Context:  waiterCtx,
+		Cancel:   waiterCancel,
+		LastSeen: time.Now(),
 	}
 
 	r.mutex.Unlock()
@@ -434,18 +473,18 @@ func (r *AgentQARegistry) AnswerQuestion(questionID, answer string, err error) e
 		return fmt.Errorf("question ID '%s' not found", questionID)
 	}
 
-	// Check if question has already been answered
-	if qa.Status == QAStatusCompleted {
+	// Check if question is in a terminal status (cannot be answered)
+	switch qa.Status {
+	case QAStatusCompleted:
 		return fmt.Errorf("question ID '%s' has already been answered", questionID)
-	}
-
-	if qa.Status == QAStatusFailed {
+	case QAStatusFailed:
 		return fmt.Errorf("question ID '%s' has already failed and cannot be answered", questionID)
-	}
-
-	// Only allow answering questions that are in processing or pending status
-	if qa.Status != QAStatusProcessing && qa.Status != QAStatusPending {
-		return fmt.Errorf("question ID '%s' is in status '%s' and cannot be answered", questionID, qa.Status)
+	case QAStatusTimeout:
+		return fmt.Errorf("question ID '%s' has timed out - late answers are not accepted", questionID)
+	case QAStatusProcessing, QAStatusPending:
+		// OK to answer
+	default:
+		return fmt.Errorf("question ID '%s' is in unexpected status '%s' and cannot be answered", questionID, qa.Status)
 	}
 
 	// Update Q&A entry
@@ -506,97 +545,7 @@ func (r *AgentQARegistry) GetAllQAs() []*QuestionAnswer {
 
 // AskQuestionAsync submits a question to a specialist and returns immediately with question ID
 func (r *AgentQARegistry) AskQuestionAsync(from, specialty, rootDir, question string) (*QuestionAnswer, error) {
-	r.mutex.Lock()
-
-	// Create directory key to find the specific directory
-	dirKey := fmt.Sprintf("%s-%s", rootDir, specialty)
-	selectedDir := r.directories[dirKey]
-
-	if selectedDir == nil {
-		r.mutex.Unlock()
-		return nil, fmt.Errorf("no directory available for specialty '%s' in root directory '%s'", specialty, rootDir)
-	}
-
-	// Check if there's an active waiter for this directory
-	activeWaiter, hasActiveWaiter := r.activeWaiters[dirKey]
-	if !hasActiveWaiter {
-		r.mutex.Unlock()
-		return nil, fmt.Errorf("no active specialist waiting for questions in directory '%s'", dirKey)
-	}
-
-	// Check if the active waiter's context is still valid
-	select {
-	case <-activeWaiter.Context.Done():
-		// Active waiter's context is cancelled, clean it up
-		LogInfo("AgentQA", fmt.Sprintf("Active waiter context cancelled for directory '%s', cleaning up", dirKey))
-		if activeWaiter.Cancel != nil {
-			activeWaiter.Cancel()
-		}
-		delete(r.activeWaiters, dirKey)
-		r.mutex.Unlock()
-		return nil, fmt.Errorf("active specialist context cancelled for directory '%s'", dirKey)
-	default:
-		// Active waiter is still valid
-	}
-
-	// Get the directory queue
-	queue, exists := r.qaQueues[selectedDir.Key]
-	if !exists {
-		r.mutex.Unlock()
-		return nil, fmt.Errorf("no queue for directory '%s'", selectedDir.Key)
-	}
-
-	// Create Q&A entry
-	qa := &QuestionAnswer{
-		ID:           uuid.New().String(),
-		From:         from,
-		To:           specialty, // Will be updated by the specialist who picks it up
-		Question:     question,
-		Status:       QAStatusPending,
-		Timestamp:    time.Now(),
-		ExpiresAt:    time.Now().Add(6 * time.Hour), // Expires after 6 hours
-		DirectoryKey: selectedDir.Key,
-	}
-
-	// Store in history
-	r.qaHistory[qa.ID] = qa
-
-	// Create response channel for future use
-	responseChan := make(chan *QuestionAnswer, 1)
-	r.waiters[qa.ID] = responseChan
-
-	r.mutex.Unlock()
-
-	// Send question to directory queue with panic recovery
-	func() {
-		defer func() {
-			if rec := recover(); rec != nil {
-				EmergencyLog("AgentQA", "Panic sending async question to directory", fmt.Sprintf("Question: %s, Directory: %s, Panic: %v", qa.ID, selectedDir.Key, rec))
-			}
-		}()
-
-		select {
-		case queue <- qa:
-			// Question sent successfully
-			LogInfo("AgentQA", fmt.Sprintf("Async question %s sent to directory '%s' (active waiter: %s)", qa.ID, selectedDir.Key, activeWaiter.Name))
-		default:
-			// Queue is full
-			r.mutex.Lock()
-			qa.Status = QAStatusFailed
-			qa.Error = "Directory queue is full"
-			delete(r.waiters, qa.ID)
-			r.mutex.Unlock()
-			LogError("AgentQA", "Directory queue is full", fmt.Sprintf("Async question: %s, Directory: %s", qa.ID, selectedDir.Key))
-		}
-	}()
-
-	// Check if question sending failed
-	if qa.Status == QAStatusFailed {
-		return qa, fmt.Errorf(qa.Error)
-	}
-
-	// Return immediately with the question ID
-	return qa, nil
+	return r.askQuestionInternal(from, specialty, rootDir, question, false, 0)
 }
 
 // GetAnswer retrieves the answer for a previously asked question
@@ -610,8 +559,8 @@ func (r *AgentQARegistry) GetAnswer(questionID string, timeout time.Duration) (*
 		return nil, fmt.Errorf("question ID '%s' not found", questionID)
 	}
 
-	// Check if answer is already available
-	if qa.Status == QAStatusCompleted || qa.Status == QAStatusFailed {
+	// Check if answer is already available or question is in terminal status
+	if qa.Status == QAStatusCompleted || qa.Status == QAStatusFailed || qa.Status == QAStatusTimeout {
 		r.mutex.RUnlock()
 		return qa, nil
 	}
@@ -666,14 +615,27 @@ func (r *AgentQARegistry) GetAnswer(questionID string, timeout time.Duration) (*
 	}
 }
 
-// startCleanupRoutine starts a goroutine that periodically cleans up expired Q&A entries
-func (r *AgentQARegistry) startCleanupRoutine() {
+// startMaintenanceRoutine starts a unified goroutine that handles all periodic maintenance tasks:
+// - Health monitoring (every 5 minutes)
+// - Expired Q&A cleanup (every hour)
+// - Expired waiter cleanup (every hour)
+func (r *AgentQARegistry) startMaintenanceRoutine() {
 	go func() {
-		ticker := time.NewTicker(1 * time.Hour) // Run cleanup every hour
+		ticker := time.NewTicker(5 * time.Minute)
 		defer ticker.Stop()
 
+		tickCount := 0
 		for range ticker.C {
-			r.cleanupExpiredEntries()
+			tickCount++
+
+			// Health check runs every tick (5 minutes)
+			r.checkSystemHealth()
+
+			// Cleanup tasks run every 12 ticks (1 hour)
+			if tickCount%12 == 0 {
+				r.cleanupExpiredEntries()
+				r.cleanupExpiredWaiters()
+			}
 		}
 	}()
 }
@@ -802,7 +764,6 @@ func (r *AgentQARegistry) GetSystemHealth() map[string]any {
 			"directory_key": key,
 			"name":          waiter.Name,
 			"last_seen":     waiter.LastSeen.Format(time.RFC3339),
-			"channel_gen":   waiter.ChannelGen,
 		}
 
 		// Check if waiter context is still valid
@@ -817,18 +778,6 @@ func (r *AgentQARegistry) GetSystemHealth() map[string]any {
 	}
 
 	return health
-}
-
-// startWaiterCleanupRoutine starts a goroutine that periodically cleans up expired active waiters
-func (r *AgentQARegistry) startWaiterCleanupRoutine() {
-	go func() {
-		ticker := time.NewTicker(1 * time.Hour) // Run cleanup every hour
-		defer ticker.Stop()
-
-		for range ticker.C {
-			r.cleanupExpiredWaiters()
-		}
-	}()
 }
 
 // cleanupExpiredWaiters removes expired active waiters
@@ -884,18 +833,6 @@ func (r *AgentQARegistry) cleanupExpiredWaiters() {
 	if expiredCount > 0 || cancelledCount > 0 {
 		LogInfo("AgentQA", fmt.Sprintf("Cleaned up %d expired and %d cancelled active waiters", expiredCount, cancelledCount))
 	}
-}
-
-// startHealthMonitoringRoutine starts a goroutine that periodically monitors system health
-func (r *AgentQARegistry) startHealthMonitoringRoutine() {
-	go func() {
-		ticker := time.NewTicker(5 * time.Minute) // Check health every 5 minutes
-		defer ticker.Stop()
-
-		for range ticker.C {
-			r.checkSystemHealth()
-		}
-	}()
 }
 
 // checkSystemHealth performs health checks and logs warnings for problematic states
