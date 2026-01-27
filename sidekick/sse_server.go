@@ -5,40 +5,89 @@ import (
 	"fmt"
 	"net/http"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/mark3labs/mcp-go/server"
 )
 
-// SSEServerConfig holds configuration for the SSE server
+// SSEServerConfig holds configuration for the HTTP server
 type SSEServerConfig struct {
 	Host string
 	Port string
 }
 
-// StartSSEServer starts the MCP server in SSE mode
-func StartSSEServer(mcpServer *server.MCPServer, config SSEServerConfig) error {
-	LogInfo("SSEServer", "Starting Sidekick in SSE mode", fmt.Sprintf("Host: %s, Port: %s", config.Host, config.Port))
+// combinedHandler routes requests to either SSE or Streamable HTTP transport
+type combinedHandler struct {
+	sseServer            *server.SSEServer
+	streamableHTTPServer *server.StreamableHTTPServer
+}
 
-	// Create SSE server with session cleanup
+func (h *combinedHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Path
+
+	// Route to SSE server for SSE-specific endpoints
+	// SSE uses: GET /mcp/sse for event stream, POST /mcp/message for messages
+	if strings.HasPrefix(path, "/mcp/sse") || strings.HasPrefix(path, "/mcp/message") {
+		h.sseServer.ServeHTTP(w, r)
+		return
+	}
+
+	// Route to Streamable HTTP server for /mcp endpoint
+	// Streamable HTTP uses: POST /mcp for all operations
+	if path == "/mcp" || strings.HasPrefix(path, "/mcp/") {
+		// For Streamable HTTP, handle POST requests to /mcp
+		if r.Method == http.MethodPost || r.Method == http.MethodGet || r.Method == http.MethodDelete {
+			h.streamableHTTPServer.ServeHTTP(w, r)
+			return
+		}
+	}
+
+	// Fallback: try SSE server for any other /mcp paths
+	if strings.HasPrefix(path, "/mcp") {
+		h.sseServer.ServeHTTP(w, r)
+		return
+	}
+
+	// Not found for non-MCP paths
+	http.NotFound(w, r)
+}
+
+// StartSSEServer starts the MCP server with both SSE and Streamable HTTP transports
+func StartSSEServer(mcpServer *server.MCPServer, config SSEServerConfig) error {
+	addr := fmt.Sprintf("%s:%s", config.Host, config.Port)
+	LogInfo("HTTPServer", "Starting Sidekick HTTP server", fmt.Sprintf("Host: %s, Port: %s", config.Host, config.Port))
+
+	// Create SSE server for SSE transport (Claude Code, etc.)
 	sseServer := server.NewSSEServer(mcpServer,
 		server.WithBaseURL(fmt.Sprintf("http://%s:%s", config.Host, config.Port)),
 		server.WithStaticBasePath("/mcp"),
 		server.WithKeepAlive(true),
 	)
 
-	// Store SSE server globally for session tracking
+	// Create Streamable HTTP server for Streamable HTTP transport (Codex, etc.)
+	streamableHTTPServer := server.NewStreamableHTTPServer(mcpServer,
+		server.WithEndpointPath("/mcp"),
+		server.WithStateful(true),
+	)
+
+	// Store servers globally for session tracking
 	globalSSEServer = sseServer
+	globalStreamableHTTPServer = streamableHTTPServer
 
-	// Start HTTP server
-	addr := fmt.Sprintf("%s:%s", config.Host, config.Port)
-	LogInfo("SSEServer", "SSE server listening", fmt.Sprintf("Address: %s", addr))
-	LogInfo("SSEServer", "SSE endpoint available", fmt.Sprintf("URL: http://%s/mcp/sse", addr))
+	// Create combined handler for both transports
+	handler := &combinedHandler{
+		sseServer:            sseServer,
+		streamableHTTPServer: streamableHTTPServer,
+	}
 
-	// Create HTTP server
+	LogInfo("HTTPServer", "SSE endpoint available", fmt.Sprintf("URL: http://%s/mcp/sse", addr))
+	LogInfo("HTTPServer", "Streamable HTTP endpoint available", fmt.Sprintf("URL: http://%s/mcp", addr))
+
+	// Create HTTP server with combined handler
 	httpServer := &http.Server{
 		Addr:    addr,
-		Handler: sseServer, // Use SSE server directly
+		Handler: handler,
 	}
 
 	// Start server in a goroutine to handle graceful shutdown
@@ -52,9 +101,9 @@ func StartSSEServer(mcpServer *server.MCPServer, config SSEServerConfig) error {
 	// Wait for either error or shutdown signal
 	select {
 	case err := <-errChan:
-		return fmt.Errorf("SSE server error: %w", err)
+		return fmt.Errorf("HTTP server error: %w", err)
 	case <-shutdownChan:
-		LogInfo("SSEServer", "Shutting down SSE server...")
+		LogInfo("HTTPServer", "Shutting down HTTP server...")
 
 		// If TUI is active, use graceful shutdown with UI feedback
 		if tuiState.IsActive() && globalTUIManager != nil && globalTUIManager.app != nil {
@@ -83,14 +132,19 @@ func StartSSEServer(mcpServer *server.MCPServer, config SSEServerConfig) error {
 			shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer shutdownCancel()
 
-			// Shutdown SSE server first
+			// Shutdown SSE server
 			if err := sseServer.Shutdown(shutdownCtx); err != nil {
-				LogError("SSEServer", "SSE server shutdown error", err.Error())
+				LogError("HTTPServer", "SSE server shutdown error", err.Error())
+			}
+
+			// Shutdown Streamable HTTP server
+			if err := streamableHTTPServer.Shutdown(shutdownCtx); err != nil {
+				LogError("HTTPServer", "Streamable HTTP server shutdown error", err.Error())
 			}
 
 			// Then shutdown HTTP server (will likely be already closed by force close)
 			if err := httpServer.Shutdown(shutdownCtx); err != nil && err != http.ErrServerClosed {
-				LogError("SSEServer", "HTTP server shutdown error", err.Error())
+				LogError("HTTPServer", "HTTP server shutdown error", err.Error())
 			}
 
 			return nil
@@ -98,9 +152,9 @@ func StartSSEServer(mcpServer *server.MCPServer, config SSEServerConfig) error {
 	}
 }
 
-// handleSessionClosed is called when an SSE session is closed
+// handleSessionClosed is called when a session is closed
 func handleSessionClosed(sessionID string) {
-	LogInfo("SSEServer", "Session disconnected, cleaning up", fmt.Sprintf("SessionID: %s", sessionID))
+	LogInfo("HTTPServer", "Session disconnected, cleaning up", fmt.Sprintf("SessionID: %s", sessionID))
 
 	// Mark session as disconnected (but keep it in memory)
 	sessionManager.MarkSessionDisconnected(sessionID)
@@ -111,10 +165,10 @@ func handleSessionClosed(sessionID string) {
 	killedCount := registry.killProcessesBySession(sessionID)
 
 	if killedCount > 0 {
-		LogInfo("SSEServer", "Processes killed for disconnected session",
+		LogInfo("HTTPServer", "Processes killed for disconnected session",
 			fmt.Sprintf("Count: %d, SessionID: %s", killedCount, sessionID))
 	} else {
-		LogInfo("SSEServer", "No processes to clean up", fmt.Sprintf("SessionID: %s", sessionID))
+		LogInfo("HTTPServer", "No processes to clean up", fmt.Sprintf("SessionID: %s", sessionID))
 	}
 
 	// Force garbage collection to clean up any hanging resources

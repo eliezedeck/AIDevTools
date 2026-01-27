@@ -42,7 +42,10 @@
       "Bash(true)",
       "WebFetch(domain:raw.githubusercontent.com)",
       "Bash(go list:*)",
-      "Bash(./build.sh)"
+      "Bash(./build.sh)",
+      "mcp__sidekick__list_specialists",
+      "mcp__sidekick__get_answer",
+      "mcp__sidekick__get_system_health"
     ],
     "deny": []
   }

@@ -138,9 +138,9 @@ func (sm *SessionManager) GetAllSessions() map[string]*Session {
 
 // ExtractSessionFromContext extracts session ID from the context and ensures session exists
 func ExtractSessionFromContext(ctx context.Context) string {
-	// Check if we're in SSE mode
-	if globalSSEServer == nil {
-		LogInfo("Session", "Not in SSE mode, no session ID", "")
+	// Check if we're in HTTP mode (SSE or Streamable HTTP)
+	if globalSSEServer == nil && globalStreamableHTTPServer == nil {
+		LogInfo("Session", "Not in HTTP mode, no session ID", "")
 		return "" // stdio mode, no session
 	}
 

@@ -21,6 +21,9 @@ var version = "dev"
 // Global SSE server reference for session tracking
 var globalSSEServer *server.SSEServer
 
+// Global Streamable HTTP server reference for session tracking
+var globalStreamableHTTPServer *server.StreamableHTTPServer
+
 // Global TUI manager reference for shutdown handling
 var globalTUIManager *TUIManager
 

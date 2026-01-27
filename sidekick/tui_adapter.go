@@ -96,8 +96,8 @@ func (tm *TUIManager) Stop() {
 
 // IsTUIMode returns true if we should run in TUI mode
 func IsTUIMode() bool {
-	// TUI is only available in SSE mode
-	return globalSSEServer != nil
+	// TUI is only available in HTTP mode (SSE or Streamable HTTP)
+	return globalSSEServer != nil || globalStreamableHTTPServer != nil
 }
 
 // StartTUIIfEnabled starts the TUI if conditions are met with proper error handling
