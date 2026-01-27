@@ -480,7 +480,9 @@ func (r *AgentQARegistry) AnswerQuestion(questionID, answer string, err error) e
 	case QAStatusFailed:
 		return fmt.Errorf("question ID '%s' has already failed and cannot be answered", questionID)
 	case QAStatusTimeout:
-		return fmt.Errorf("question ID '%s' has timed out - late answers are not accepted", questionID)
+		// Allow late answers for timed-out questions
+		// The questioner can still retrieve the answer via get_answer
+		LogInfo("AgentQA", fmt.Sprintf("Late answer received for timed-out question %s", questionID))
 	case QAStatusProcessing, QAStatusPending:
 		// OK to answer
 	default:
@@ -496,6 +498,7 @@ func (r *AgentQARegistry) AnswerQuestion(questionID, answer string, err error) e
 	} else {
 		qa.Status = QAStatusCompleted
 		qa.Answer = answer
+		qa.Error = "" // Clear any previous error (e.g., from timeout)
 	}
 
 	// No need to update specialist status in the new system
