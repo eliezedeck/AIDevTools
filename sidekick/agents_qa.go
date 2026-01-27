@@ -553,29 +553,44 @@ func (r *AgentQARegistry) AskQuestionAsync(from, specialty, rootDir, question st
 
 // GetAnswer retrieves the answer for a previously asked question
 func (r *AgentQARegistry) GetAnswer(questionID string, timeout time.Duration) (*QuestionAnswer, error) {
-	r.mutex.RLock()
+	r.mutex.Lock() // Use Lock since we might modify waiters
 
 	// Get the Q&A entry
 	qa, exists := r.qaHistory[questionID]
 	if !exists {
-		r.mutex.RUnlock()
+		r.mutex.Unlock()
 		return nil, fmt.Errorf("question ID '%s' not found", questionID)
 	}
 
-	// Check if answer is already available or question is in terminal status
-	if qa.Status == QAStatusCompleted || qa.Status == QAStatusFailed || qa.Status == QAStatusTimeout {
-		r.mutex.RUnlock()
+	// Check if answer is already available
+	if qa.Status == QAStatusCompleted {
+		r.mutex.Unlock()
 		return qa, nil
 	}
 
-	// Get the waiter channel
-	waiter, exists := r.waiters[questionID]
-	if !exists {
-		// No waiter channel means the question was already answered or timed out
-		r.mutex.RUnlock()
+	// Check if question has truly failed (not just timed out)
+	if qa.Status == QAStatusFailed {
+		r.mutex.Unlock()
 		return qa, nil
 	}
-	r.mutex.RUnlock()
+
+	// For timed-out questions, check if a late answer has been provided
+	// (The specialist may have answered after the initial caller timed out)
+	if qa.Status == QAStatusTimeout && qa.Answer != "" {
+		r.mutex.Unlock()
+		return qa, nil
+	}
+
+	// Get or create the waiter channel
+	// For timed-out questions, the original waiter was deleted, so we need to create a new one
+	waiter, exists := r.waiters[questionID]
+	if !exists {
+		// Create a new waiter channel (allows waiting for late answers after timeout)
+		waiter = make(chan *QuestionAnswer, 1)
+		r.waiters[questionID] = waiter
+		LogInfo("AgentQA", fmt.Sprintf("Created new waiter channel for question %s (status: %s)", questionID, qa.Status))
+	}
+	r.mutex.Unlock()
 
 	// Wait for answer with timeout and closed channel handling
 	if timeout == 0 {

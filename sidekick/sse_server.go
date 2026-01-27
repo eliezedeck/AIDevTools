@@ -19,8 +19,9 @@ type SSEServerConfig struct {
 
 // combinedHandler routes requests to either SSE or Streamable HTTP transport
 type combinedHandler struct {
-	sseServer            *server.SSEServer
-	streamableHTTPServer *server.StreamableHTTPServer
+	sseServer                   *server.SSEServer
+	streamableHTTPServer        *server.StreamableHTTPServer
+	streamableHTTPStrippedHandler http.Handler
 }
 
 func (h *combinedHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -33,12 +34,12 @@ func (h *combinedHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Route to Streamable HTTP server for /mcp endpoint
+	// Route to Streamable HTTP server for /mcp endpoint (exact match only)
 	// Streamable HTTP uses: POST /mcp for all operations
-	if path == "/mcp" || strings.HasPrefix(path, "/mcp/") {
-		// For Streamable HTTP, handle POST requests to /mcp
+	// We use http.StripPrefix to remove /mcp since WithEndpointPath only works with Start()
+	if path == "/mcp" {
 		if r.Method == http.MethodPost || r.Method == http.MethodGet || r.Method == http.MethodDelete {
-			h.streamableHTTPServer.ServeHTTP(w, r)
+			h.streamableHTTPStrippedHandler.ServeHTTP(w, r)
 			return
 		}
 	}
@@ -66,9 +67,11 @@ func StartSSEServer(mcpServer *server.MCPServer, config SSEServerConfig) error {
 	)
 
 	// Create Streamable HTTP server for Streamable HTTP transport (Codex, etc.)
+	// Note: WithEndpointPath only works with Start(), not when used as http.Handler
+	// We handle routing in combinedHandler instead
 	streamableHTTPServer := server.NewStreamableHTTPServer(mcpServer,
-		server.WithEndpointPath("/mcp"),
 		server.WithStateful(true),
+		server.WithHeartbeatInterval(30*time.Second), // Keep connection alive
 	)
 
 	// Store servers globally for session tracking
@@ -76,9 +79,11 @@ func StartSSEServer(mcpServer *server.MCPServer, config SSEServerConfig) error {
 	globalStreamableHTTPServer = streamableHTTPServer
 
 	// Create combined handler for both transports
+	// Use http.StripPrefix for StreamableHTTP since WithEndpointPath only works with Start()
 	handler := &combinedHandler{
-		sseServer:            sseServer,
-		streamableHTTPServer: streamableHTTPServer,
+		sseServer:                     sseServer,
+		streamableHTTPServer:          streamableHTTPServer,
+		streamableHTTPStrippedHandler: http.StripPrefix("/mcp", streamableHTTPServer),
 	}
 
 	LogInfo("HTTPServer", "SSE endpoint available", fmt.Sprintf("URL: http://%s/mcp/sse", addr))
