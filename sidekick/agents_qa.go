@@ -133,6 +133,7 @@ func (r *AgentQARegistry) ListDirectories() []*SpecialistDirectory {
 // askQuestionInternal is the core implementation for submitting questions to specialists.
 // If wait is true, blocks until answer is available (respecting timeout).
 // If wait is false, returns immediately with the question ID.
+// Questions are queued even if no specialist is currently waiting - a specialist can pick it up later.
 func (r *AgentQARegistry) askQuestionInternal(from, specialty, rootDir, question string, wait bool, timeout time.Duration) (*QuestionAnswer, error) {
 	r.mutex.Lock()
 
@@ -140,38 +141,42 @@ func (r *AgentQARegistry) askQuestionInternal(from, specialty, rootDir, question
 	dirKey := fmt.Sprintf("%s-%s", rootDir, specialty)
 	selectedDir := r.directories[dirKey]
 
+	// Create directory if it doesn't exist (allows queuing questions before specialist registers)
 	if selectedDir == nil {
-		r.mutex.Unlock()
-		return nil, fmt.Errorf("no directory available for specialty '%s' in root directory '%s'", specialty, rootDir)
-	}
-
-	// Check if there's an active waiter for this directory
-	activeWaiter, hasActiveWaiter := r.activeWaiters[dirKey]
-	if !hasActiveWaiter {
-		r.mutex.Unlock()
-		return nil, fmt.Errorf("no active specialist waiting for questions in directory '%s'", dirKey)
-	}
-
-	// Check if the active waiter's context is still valid
-	select {
-	case <-activeWaiter.Context.Done():
-		// Active waiter's context is cancelled, clean it up
-		LogInfo("AgentQA", fmt.Sprintf("Active waiter context cancelled for directory '%s', cleaning up", dirKey))
-		if activeWaiter.Cancel != nil {
-			activeWaiter.Cancel()
+		selectedDir = &SpecialistDirectory{
+			Key:       dirKey,
+			RootDir:   rootDir,
+			Specialty: specialty,
+			CreatedAt: time.Now(),
 		}
-		delete(r.activeWaiters, dirKey)
-		r.mutex.Unlock()
-		return nil, fmt.Errorf("active specialist context cancelled for directory '%s'", dirKey)
-	default:
-		// Active waiter is still valid
+		r.directories[dirKey] = selectedDir
+		LogInfo("AgentQA", fmt.Sprintf("Created directory '%s' for incoming question (no specialist yet)", dirKey))
 	}
 
-	// Get the directory queue
-	queue, exists := r.qaQueues[selectedDir.Key]
+	// Get or create the directory queue
+	queue, exists := r.qaQueues[dirKey]
 	if !exists {
-		r.mutex.Unlock()
-		return nil, fmt.Errorf("no queue for directory '%s'", selectedDir.Key)
+		queue = make(chan *QuestionAnswer, 100)
+		r.qaQueues[dirKey] = queue
+		LogInfo("AgentQA", fmt.Sprintf("Created queue for directory '%s'", dirKey))
+	}
+
+	// Check if there's an active waiter (for logging purposes only - not required)
+	activeWaiter, hasActiveWaiter := r.activeWaiters[dirKey]
+	if hasActiveWaiter {
+		// Verify waiter context is still valid
+		select {
+		case <-activeWaiter.Context.Done():
+			// Active waiter's context is cancelled, clean it up
+			LogInfo("AgentQA", fmt.Sprintf("Active waiter context cancelled for directory '%s', cleaning up", dirKey))
+			if activeWaiter.Cancel != nil {
+				activeWaiter.Cancel()
+			}
+			delete(r.activeWaiters, dirKey)
+			hasActiveWaiter = false
+		default:
+			// Active waiter is still valid
+		}
 	}
 
 	// Create Q&A entry
@@ -206,7 +211,11 @@ func (r *AgentQARegistry) askQuestionInternal(from, specialty, rootDir, question
 		select {
 		case queue <- qa:
 			// Question sent successfully
-			LogInfo("AgentQA", fmt.Sprintf("Question %s sent to directory '%s' (active waiter: %s)", qa.ID, selectedDir.Key, activeWaiter.Name))
+			if hasActiveWaiter {
+				LogInfo("AgentQA", fmt.Sprintf("Question %s sent to directory '%s' (active waiter: %s)", qa.ID, selectedDir.Key, activeWaiter.Name))
+			} else {
+				LogInfo("AgentQA", fmt.Sprintf("Question %s queued in directory '%s' (no active waiter yet)", qa.ID, selectedDir.Key))
+			}
 		default:
 			// Queue is full
 			r.mutex.Lock()

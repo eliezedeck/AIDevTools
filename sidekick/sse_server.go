@@ -90,9 +90,13 @@ func StartSSEServer(mcpServer *server.MCPServer, config SSEServerConfig) error {
 	LogInfo("HTTPServer", "Streamable HTTP endpoint available", fmt.Sprintf("URL: http://%s/mcp", addr))
 
 	// Create HTTP server with combined handler
+	// Set very large timeouts (24 hours) to support long-running tool calls like get_next_question
 	httpServer := &http.Server{
-		Addr:    addr,
-		Handler: handler,
+		Addr:         addr,
+		Handler:      handler,
+		ReadTimeout:  24 * time.Hour,
+		WriteTimeout: 24 * time.Hour,
+		IdleTimeout:  24 * time.Hour,
 	}
 
 	// Start server in a goroutine to handle graceful shutdown
