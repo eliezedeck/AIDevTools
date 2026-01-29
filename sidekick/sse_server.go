@@ -1,8 +1,12 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"runtime"
 	"strings"
@@ -10,6 +14,152 @@ import (
 
 	"github.com/mark3labs/mcp-go/server"
 )
+
+// responseWriterWrapper captures the status code from the response
+// and preserves optional interfaces like http.Flusher and http.Hijacker
+type responseWriterWrapper struct {
+	http.ResponseWriter
+	statusCode    int
+	headerWritten bool
+}
+
+func newResponseWriterWrapper(w http.ResponseWriter) *responseWriterWrapper {
+	return &responseWriterWrapper{
+		ResponseWriter: w,
+		statusCode:     http.StatusOK, // Default to 200
+	}
+}
+
+func (rww *responseWriterWrapper) WriteHeader(code int) {
+	if rww.headerWritten {
+		return // Prevent double WriteHeader calls
+	}
+	rww.statusCode = code
+	rww.headerWritten = true
+	rww.ResponseWriter.WriteHeader(code)
+}
+
+func (rww *responseWriterWrapper) Write(b []byte) (int, error) {
+	if !rww.headerWritten {
+		rww.headerWritten = true
+	}
+	return rww.ResponseWriter.Write(b)
+}
+
+// Flush implements http.Flusher if the underlying ResponseWriter supports it
+func (rww *responseWriterWrapper) Flush() {
+	if flusher, ok := rww.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+// Hijack implements http.Hijacker if the underlying ResponseWriter supports it
+func (rww *responseWriterWrapper) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	if hijacker, ok := rww.ResponseWriter.(http.Hijacker); ok {
+		return hijacker.Hijack()
+	}
+	return nil, nil, fmt.Errorf("underlying ResponseWriter does not support Hijack")
+}
+
+// Push implements http.Pusher if the underlying ResponseWriter supports it
+func (rww *responseWriterWrapper) Push(target string, opts *http.PushOptions) error {
+	if pusher, ok := rww.ResponseWriter.(http.Pusher); ok {
+		return pusher.Push(target, opts)
+	}
+	return http.ErrNotSupported
+}
+
+// bodyCapturingReader wraps an io.ReadCloser to capture bytes as they're read
+type bodyCapturingReader struct {
+	reader    io.ReadCloser
+	buffer    *bytes.Buffer
+	maxBytes  int
+	truncated bool
+}
+
+func newBodyCapturingReader(r io.ReadCloser, maxBytes int) *bodyCapturingReader {
+	return &bodyCapturingReader{
+		reader:   r,
+		buffer:   &bytes.Buffer{},
+		maxBytes: maxBytes,
+	}
+}
+
+func (bcr *bodyCapturingReader) Read(p []byte) (int, error) {
+	n, err := bcr.reader.Read(p)
+	if n > 0 {
+		if bcr.buffer.Len() >= bcr.maxBytes {
+			// Buffer already full, mark as truncated
+			bcr.truncated = true
+		} else {
+			remaining := bcr.maxBytes - bcr.buffer.Len()
+			if n <= remaining {
+				bcr.buffer.Write(p[:n])
+			} else {
+				bcr.buffer.Write(p[:remaining])
+				bcr.truncated = true
+			}
+		}
+	}
+	return n, err
+}
+
+func (bcr *bodyCapturingReader) Close() error {
+	return bcr.reader.Close()
+}
+
+func (bcr *bodyCapturingReader) CapturedBody() string {
+	if bcr.truncated {
+		return bcr.buffer.String() + "... [truncated]"
+	}
+	return bcr.buffer.String()
+}
+
+// formatHeaders builds a headers string for logging (no redaction - full details for debugging)
+func formatHeaders(headers http.Header) string {
+	var builder strings.Builder
+	for name, values := range headers {
+		fmt.Fprintf(&builder, "  %s: %s\n", name, strings.Join(values, ", "))
+	}
+	return builder.String()
+}
+
+// loggingMiddleware wraps an http.Handler to log full request details on errors only
+func loggingMiddleware(next http.Handler, transport string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Wrap the body to capture it as the handler reads it (only up to 8KB for errors)
+		var bodyCapture *bodyCapturingReader
+		if r.Body != nil {
+			bodyCapture = newBodyCapturingReader(r.Body, 8192)
+			r.Body = bodyCapture
+		}
+
+		// Wrap response writer to capture status code
+		wrappedWriter := newResponseWriterWrapper(w)
+
+		// Call the actual handler
+		next.ServeHTTP(wrappedWriter, r)
+
+		// Only log on errors - full unredacted details for debugging
+		if wrappedWriter.statusCode >= 400 {
+			// Build full URL with query params
+			fullURL := r.URL.Path
+			if r.URL.RawQuery != "" {
+				fullURL = r.URL.Path + "?" + r.URL.RawQuery
+			}
+
+			headersStr := formatHeaders(r.Header)
+			var bodyStr string
+			if bodyCapture != nil {
+				bodyStr = bodyCapture.CapturedBody()
+			}
+
+			LogError(transport, fmt.Sprintf("HTTP %d", wrappedWriter.statusCode),
+				fmt.Sprintf("\n=== REQUEST DUMP ===\nMethod: %s\nURL: %s\nRemoteAddr: %s\nContentLength: %d\n\nHeaders:\n%s\nBody:\n%s\n=== END REQUEST DUMP ===",
+					r.Method, fullURL, r.RemoteAddr, r.ContentLength, headersStr, bodyStr))
+		}
+	})
+}
 
 // SSEServerConfig holds configuration for the HTTP server
 type SSEServerConfig struct {
@@ -80,10 +230,15 @@ func StartSSEServer(mcpServer *server.MCPServer, config SSEServerConfig) error {
 
 	// Create combined handler for both transports
 	// Use http.StripPrefix for StreamableHTTP since WithEndpointPath only works with Start()
+	// Wrap with logging middleware for debugging HTTP errors
+	streamableHTTPWithLogging := loggingMiddleware(
+		http.StripPrefix("/mcp", streamableHTTPServer),
+		"StreamableHTTP",
+	)
 	handler := &combinedHandler{
 		sseServer:                     sseServer,
 		streamableHTTPServer:          streamableHTTPServer,
-		streamableHTTPStrippedHandler: http.StripPrefix("/mcp", streamableHTTPServer),
+		streamableHTTPStrippedHandler: streamableHTTPWithLogging,
 	}
 
 	LogInfo("HTTPServer", "SSE endpoint available", fmt.Sprintf("URL: http://%s/mcp/sse", addr))

@@ -74,6 +74,9 @@ func (p *LogsPageView) setupTable() {
 		}
 
 		switch event.Key() {
+		case tcell.KeyEnter:
+			p.showLogDetail()
+			return nil
 		case tcell.KeyRune:
 			switch event.Rune() {
 			case 'f', 'F':
@@ -110,7 +113,7 @@ func (p *LogsPageView) setupControls() {
 // setupStatusBar configures the status bar
 func (p *LogsPageView) setupStatusBar() {
 	p.statusBar.SetDynamicColors(true)
-	p.statusBar.SetText("[yellow]Tab[white]: Switch panels | [yellow]f[white]: Filter | [yellow]c[white]: Clear | [yellow]↑↓[white]: Navigate\n[grey]Pages: [yellow]1[white]: Processes | [yellow]2[white]: Notifications | [yellow]3[white]: Logs | [yellow]4[white]: Agents Q&A[grey]")
+	p.statusBar.SetText("[yellow]Enter[white]: View Details | [yellow]Tab[white]: Switch panels | [yellow]f[white]: Filter | [yellow]c[white]: Clear | [yellow]↑↓[white]: Navigate\n[grey]Pages: [yellow]1[white]: Processes | [yellow]2[white]: Notifications | [yellow]3[white]: Logs | [yellow]4[white]: Agents Q&A[grey]")
 	p.statusBar.SetBorder(true).SetBorderPadding(0, 0, 1, 1)
 	p.statusBar.SetBackgroundColor(tcell.ColorBlack)
 }
@@ -256,6 +259,23 @@ func (p *LogsPageView) toggleFilter() {
 func (p *LogsPageView) clearLogs() {
 	ClearLogs()
 	p.Refresh()
+}
+
+// showLogDetail shows the full details of the selected log entry
+func (p *LogsPageView) showLogDetail() {
+	// Get current logs based on filter
+	var logs []LogEntry
+	if p.showAllLevels {
+		logs = GetLogEntries()
+	} else {
+		logs = logger.GetEntriesByLevel(p.filterLevel)
+	}
+
+	// Check if selection is valid (accounting for header row)
+	if p.selectedRow > 0 && p.selectedRow <= len(logs) {
+		entry := logs[p.selectedRow-1]
+		ShowLogDetailModal(p.tuiApp.app, p.tuiApp.pages, entry)
+	}
 }
 
 // updateStatusBar updates the status bar text

@@ -377,7 +377,7 @@ func main() {
 			mcp.Description("Question to ask"),
 		),
 		mcp.WithBoolean("wait",
-			mcp.Description("Whether to wait for the answer (default: true)"),
+			mcp.Description("Whether to wait for the answer (default: true). Recommended: use wait=true in most cases to get the answer immediately. Only set wait=false if you are doing other work in parallel and will call get_answer later to retrieve the response."),
 		),
 		mcp.WithNumber("timeout",
 			mcp.Description("Timeout in milliseconds if wait=true (optional, default 0 = no timeout)"),
