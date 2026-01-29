@@ -8,12 +8,44 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/mark3labs/mcp-go/server"
 )
+
+// FlexibleSessionIdManager generates plain UUIDs and validates by extracting the UUID via regex.
+// It accepts any session ID that contains a valid UUID, regardless of prefix.
+// It only validates format, not existence, to allow reconnects after disconnect/restart.
+type FlexibleSessionIdManager struct{}
+
+// uuidRegex matches a UUID anywhere in the string
+var uuidRegex = regexp.MustCompile(`[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`)
+
+// Generate creates a new session ID (plain UUID)
+func (s *FlexibleSessionIdManager) Generate() string {
+	return uuid.New().String()
+}
+
+// Validate checks if the session ID contains a valid UUID anywhere in the string.
+// This handles any prefix format (e.g., "mcp-session-<uuid>", "<uuid>", "prefix-<uuid>", etc.)
+func (s *FlexibleSessionIdManager) Validate(sessionID string) (isTerminated bool, err error) {
+	// Extract UUID from anywhere in the session ID
+	if !uuidRegex.MatchString(sessionID) {
+		return false, fmt.Errorf("invalid session id (no valid UUID found): %s", sessionID)
+	}
+
+	// Don't check existence - allow reconnects after disconnect/restart
+	return false, nil
+}
+
+// Terminate marks a session as terminated (no-op since we don't track state)
+func (s *FlexibleSessionIdManager) Terminate(sessionID string) (isNotAllowed bool, err error) {
+	return false, nil
+}
 
 // responseWriterWrapper captures the status code from the response
 // and preserves optional interfaces like http.Flusher and http.Hijacker
@@ -219,8 +251,12 @@ func StartSSEServer(mcpServer *server.MCPServer, config SSEServerConfig) error {
 	// Create Streamable HTTP server for Streamable HTTP transport (Codex, etc.)
 	// Note: WithEndpointPath only works with Start(), not when used as http.Handler
 	// We handle routing in combinedHandler instead
+	// Use FlexibleSessionIdManager which:
+	// - Generates plain UUIDs (no prefix)
+	// - Validates by stripping "mcp-session-" prefix if present (handles Codex adding prefix)
+	// - Only validates format, not existence (allows reconnects after disconnect/restart)
 	streamableHTTPServer := server.NewStreamableHTTPServer(mcpServer,
-		server.WithStateful(true),
+		server.WithSessionIdManager(&FlexibleSessionIdManager{}),
 		server.WithHeartbeatInterval(30*time.Second), // Keep connection alive
 	)
 
