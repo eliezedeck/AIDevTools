@@ -231,8 +231,6 @@ func (p *AgentsQAPageView) getStatusColor(status QAStatus) string {
 		return "[green]Completed[white]"
 	case QAStatusFailed:
 		return "[red]Failed[white]"
-	case QAStatusTimeout:
-		return "[red]Timeout[white]"
 	default:
 		return string(status)
 	}
@@ -552,7 +550,7 @@ func (p *AgentsQAPageView) getStatusColor2(status QAStatus) tcell.Color {
 		return tcell.ColorBlue
 	case QAStatusCompleted:
 		return tcell.ColorGreen
-	case QAStatusFailed, QAStatusTimeout:
+	case QAStatusFailed:
 		return tcell.ColorRed
 	default:
 		return tcell.ColorWhite
@@ -568,8 +566,8 @@ func (p *AgentsQAPageView) showDirectoryDetails(dirKey string) {
 	}
 
 	// Format the directory detail view
-	detail := fmt.Sprintf("[yellow]Directory:[white] %s\n", dirKey)
-	detail += fmt.Sprintf("[yellow]Root Directory:[white] %s\n", dir.RootDir)
+	detail := fmt.Sprintf("[yellow]Directory Key:[white] %s\n", dirKey)
+	detail += fmt.Sprintf("[yellow]Project Folder:[white] %s\n", dir.RootDir)
 	detail += fmt.Sprintf("[yellow]Specialty:[white] %s\n", dir.Specialty)
 	detail += fmt.Sprintf("[yellow]Created At:[white] %s\n", dir.CreatedAt.Format("15:04:05"))
 
