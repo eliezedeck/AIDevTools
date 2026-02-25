@@ -134,6 +134,12 @@ func (t *TUIApp) handleSignals() {
 
 // handleGlobalKeys handles global keyboard shortcuts
 func (t *TUIApp) handleGlobalKeys(event *tcell.EventKey) *tcell.EventKey {
+	// If an overlay modal is showing, pass all events through to it
+	if t.pages.HasPage("log-detail") || t.pages.HasPage("quit-confirmation") ||
+		t.pages.HasPage("kill-confirmation") || t.pages.HasPage("shutdown-modal") {
+		return event
+	}
+
 	// Check if we're in the process detail page with input field focused
 	if t.currentPage == ProcessDetailPage && t.processDetailPage != nil {
 		// Check if the input field is focused
