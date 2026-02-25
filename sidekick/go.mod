@@ -3,10 +3,12 @@ module sidekick
 go 1.23.4
 
 require (
+	github.com/fsnotify/fsnotify v1.9.0
 	github.com/gdamore/tcell/v2 v2.7.4
 	github.com/google/uuid v1.6.0
 	github.com/mark3labs/mcp-go v0.43.2
 	github.com/rivo/tview v0.0.0-20241227133733-17b7edb88c57
+	github.com/tidwall/jsonc v0.3.2
 )
 
 require (

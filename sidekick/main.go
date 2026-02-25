@@ -414,6 +414,18 @@ func main() {
 	s.AddTool(getAnswerTool, handleGetAnswer)
 	s.AddTool(getSystemHealthTool, handleGetSystemHealth)
 
+	// 🎯 Auto-start keybindings watcher if previously enabled
+	cfg, cfgErr := LoadConfig()
+	if cfgErr != nil {
+		LogWarn("Main", "Failed to load config", cfgErr.Error())
+	} else if cfg.CursorKeybindingsWatcher.Enabled {
+		if err := StartKeybindingsWatcher(); err != nil {
+			LogWarn("Main", "Failed to auto-start keybindings watcher", err.Error())
+		} else {
+			LogInfo("Main", "Cursor keybindings watcher auto-started from config")
+		}
+	}
+
 	// 🚦 Setup signal handling for graceful shutdown
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
@@ -610,6 +622,7 @@ func countRunningProcesses(processes []*ProcessTracker) int {
 // handleTUIShutdown performs graceful shutdown with UI feedback
 func handleTUIShutdown(tuiApp *TUIApp) {
 	StopCleanupRoutine()
+	StopKeybindingsWatcher()
 
 	modal := NewShutdownModal(tuiApp.app)
 	modal.Show(tuiApp.pages)
@@ -651,6 +664,7 @@ func handleTUIShutdown(tuiApp *TUIApp) {
 // then sends SIGKILL to any remaining processes
 func handleGracefulShutdown() {
 	StopCleanupRoutine()
+	StopKeybindingsWatcher()
 
 	runningProcesses := getRunningProcesses()
 	if len(runningProcesses) == 0 {

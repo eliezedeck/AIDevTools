@@ -23,6 +23,7 @@ const (
 	NotificationsPage
 	AgentsQAPage
 	LogsPage
+	FeaturesPage
 )
 
 // TUIApp represents the main TUI application - IDIOMATIC IMPLEMENTATION
@@ -34,6 +35,7 @@ type TUIApp struct {
 	notificationsPage *NotificationsPageView
 	logsPage          *LogsPageView
 	agentsQAPage      *AgentsQAPageView
+	featuresPage      *FeaturesPageView
 	currentPage       PageType
 	ctx               context.Context
 	cancel            context.CancelFunc
@@ -85,6 +87,7 @@ func NewTUIApp() *TUIApp {
 	tuiApp.notificationsPage = NewNotificationsPageView(tuiApp)
 	tuiApp.logsPage = NewLogsPageView(tuiApp)
 	tuiApp.agentsQAPage = NewAgentsQAPageView(tuiApp)
+	tuiApp.featuresPage = NewFeaturesPageView(tuiApp)
 
 	// Add pages to the page container
 	tuiApp.pages.AddPage("processes", tuiApp.processesPage.GetView(), true, true)
@@ -92,6 +95,7 @@ func NewTUIApp() *TUIApp {
 	tuiApp.pages.AddPage("notifications", tuiApp.notificationsPage.GetView(), true, false)
 	tuiApp.pages.AddPage("logs", tuiApp.logsPage.GetView(), true, false)
 	tuiApp.pages.AddPage("agents_qa", tuiApp.agentsQAPage.GetView(), true, false)
+	tuiApp.pages.AddPage("features", tuiApp.featuresPage.GetView(), true, false)
 
 	// Set up the main layout
 	tuiApp.app.SetRoot(tuiApp.pages, true)
@@ -145,6 +149,12 @@ func (t *TUIApp) handleGlobalKeys(event *tcell.EventKey) *tcell.EventKey {
 		}
 	}
 
+	// Check if we're in the features page with webhook input field focused
+	if t.currentPage == FeaturesPage && t.featuresPage != nil && t.featuresPage.inputVisible {
+		// Pass all keys to the input field — it handles Enter/Esc via DoneFunc
+		return event
+	}
+
 	switch event.Key() {
 	case tcell.KeyTab:
 		// Switch to next page
@@ -167,6 +177,9 @@ func (t *TUIApp) handleGlobalKeys(event *tcell.EventKey) *tcell.EventKey {
 			return nil
 		case '4':
 			t.SwitchToPage(LogsPage)
+			return nil
+		case '5':
+			t.SwitchToPage(FeaturesPage)
 			return nil
 		case 'q', 'Q':
 			// Show quit confirmation dialog
@@ -205,6 +218,8 @@ func (t *TUIApp) switchToNextPage() {
 	case AgentsQAPage:
 		t.SwitchToPage(LogsPage)
 	case LogsPage:
+		t.SwitchToPage(FeaturesPage)
+	case FeaturesPage:
 		t.SwitchToPage(ProcessesPage)
 	case ProcessDetailPage:
 		t.SwitchToPage(ProcessesPage)
@@ -215,13 +230,15 @@ func (t *TUIApp) switchToNextPage() {
 func (t *TUIApp) switchToPrevPage() {
 	switch t.currentPage {
 	case ProcessesPage:
-		t.SwitchToPage(LogsPage)
+		t.SwitchToPage(FeaturesPage)
 	case NotificationsPage:
 		t.SwitchToPage(ProcessesPage)
 	case AgentsQAPage:
 		t.SwitchToPage(NotificationsPage)
 	case LogsPage:
 		t.SwitchToPage(AgentsQAPage)
+	case FeaturesPage:
+		t.SwitchToPage(LogsPage)
 	case ProcessDetailPage:
 		t.SwitchToPage(ProcessesPage)
 	}
@@ -252,6 +269,9 @@ func (t *TUIApp) SwitchToPage(page PageType) {
 	case AgentsQAPage:
 		t.pages.SwitchToPage("agents_qa")
 		t.agentsQAPage.Refresh()
+	case FeaturesPage:
+		t.pages.SwitchToPage("features")
+		t.featuresPage.Refresh()
 	}
 
 	t.app.SetFocus(t.pages)

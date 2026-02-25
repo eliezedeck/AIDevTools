@@ -1,14 +1,21 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
 	"os/exec"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/mark3labs/mcp-go/mcp" // Used by handleSpeak
 )
+
+// Shared HTTP client with timeout for Discord webhook calls
+var discordHTTPClient = &http.Client{Timeout: 10 * time.Second}
 
 // NotificationEntry represents a notification in history
 type NotificationEntry struct {
@@ -118,5 +125,102 @@ func handleSpeak(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToo
 		}()
 	}
 
+	// 📨 Send to Discord webhook (async, regardless of soundEnabled)
+	go sendDiscordWebhook(text)
+
 	return mcp.NewToolResultText("Notification spoken!"), nil
+}
+
+// sendDiscordWebhook sends a notification to the configured Discord webhook
+func sendDiscordWebhook(text string) {
+	cfg, err := LoadConfig()
+	if err != nil || cfg.Discord.WebhookURL == "" {
+		return
+	}
+	sendDiscordMessage(cfg.Discord.WebhookURL, text)
+}
+
+// sendDiscordMessage posts a message to a Discord webhook URL
+func sendDiscordMessage(webhookURL, text string) error {
+	payload := map[string]any{
+		"content":          text,
+		"allowed_mentions": map[string]any{"parse": []string{}},
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		LogError("Discord", "Failed to marshal payload", err.Error())
+		return err
+	}
+
+	resp, err := discordHTTPClient.Post(webhookURL, "application/json", bytes.NewReader(body))
+	if err != nil {
+		LogError("Discord", "Failed to send webhook", err.Error())
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		LogError("Discord", fmt.Sprintf("Webhook returned status %d", resp.StatusCode))
+		return fmt.Errorf("discord webhook returned status %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// SetDiscordWebhookURL validates and saves the Discord webhook URL
+func SetDiscordWebhookURL(url string) error {
+	if !strings.HasPrefix(url, "https://discord.com/api/webhooks/") &&
+		!strings.HasPrefix(url, "https://discordapp.com/api/webhooks/") {
+		return fmt.Errorf("invalid Discord webhook URL: must start with https://discord.com/api/webhooks/")
+	}
+	if err := UpdateConfig(func(cfg *SidekickConfig) {
+		cfg.Discord.WebhookURL = url
+	}); err != nil {
+		return err
+	}
+	LogInfo("Discord", "Webhook URL configured")
+	return nil
+}
+
+// ClearDiscordWebhookURL removes the Discord webhook URL
+func ClearDiscordWebhookURL() error {
+	if err := UpdateConfig(func(cfg *SidekickConfig) {
+		cfg.Discord.WebhookURL = ""
+	}); err != nil {
+		return err
+	}
+	LogInfo("Discord", "Webhook URL cleared")
+	return nil
+}
+
+// IsDiscordWebhookConfigured returns whether a Discord webhook URL is set
+func IsDiscordWebhookConfigured() bool {
+	cfg, err := LoadConfig()
+	if err != nil {
+		return false
+	}
+	return cfg.Discord.WebhookURL != ""
+}
+
+// GetDiscordWebhookURLMasked returns the webhook URL with most of it hidden
+func GetDiscordWebhookURLMasked() string {
+	cfg, err := LoadConfig()
+	if err != nil || cfg.Discord.WebhookURL == "" {
+		return ""
+	}
+	if len(cfg.Discord.WebhookURL) > 8 {
+		return "..." + cfg.Discord.WebhookURL[len(cfg.Discord.WebhookURL)-8:]
+	}
+	return "***"
+}
+
+// TestDiscordWebhook sends a test message to the configured webhook
+func TestDiscordWebhook() error {
+	cfg, err := LoadConfig()
+	if err != nil {
+		return err
+	}
+	if cfg.Discord.WebhookURL == "" {
+		return fmt.Errorf("no Discord webhook URL configured")
+	}
+	return sendDiscordMessage(cfg.Discord.WebhookURL, "Test notification from Sidekick")
 }

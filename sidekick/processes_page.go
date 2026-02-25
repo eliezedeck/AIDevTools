@@ -61,7 +61,7 @@ func (p *ProcessesPageView) setupTable() {
 // setupStatusBar configures the status bar
 func (p *ProcessesPageView) setupStatusBar() {
 	p.statusBar.SetBorder(true).SetTitle(" Controls ").SetTitleAlign(tview.AlignLeft)
-	p.statusBar.SetText("[yellow]↑↓[white]: Navigate | [yellow]Enter[white]: View Details | [yellow]K[white]: Kill Process | [yellow]Del[white]: Remove Process | [yellow]R[white]: Sort | [yellow]Tab[white]: Switch Page | [yellow]Q[white]: Quit\n[grey]Pages: [yellow]1[white]: Processes | [yellow]2[white]: Notifications | [yellow]3[white]: Logs | [yellow]4[white]: Agents Q&A[grey]")
+	p.statusBar.SetText("[yellow]↑↓[white]: Navigate | [yellow]Enter[white]: View Details | [yellow]K[white]: Kill Process | [yellow]Del[white]: Remove Process | [yellow]R[white]: Sort | [yellow]Tab[white]: Switch Page | [yellow]Q[white]: Quit\n[grey]Pages: [yellow]1[white]: Processes | [yellow]2[white]: Notifications | [yellow]3[white]: Agents Q&A | [yellow]4[white]: Logs | [yellow]5[white]: Features[grey]")
 	p.statusBar.SetTextAlign(tview.AlignCenter)
 	p.statusBar.SetDynamicColors(true)
 }

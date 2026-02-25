@@ -77,7 +77,7 @@ func (p *AgentsQAPageView) setupDetailView() {
 // setupStatusBar configures the status bar
 func (p *AgentsQAPageView) setupStatusBar() {
 	p.statusBar.SetBorder(true).SetTitle(" Controls ").SetTitleAlign(tview.AlignLeft)
-	p.statusBar.SetText("[yellow]↑↓[white]: Navigate | [yellow]Enter[white]: View Details | [yellow]Tab[white]: Switch Focus | [yellow]Q[white]: Quit\n[grey]Pages: [yellow]1[white]: Processes | [yellow]2[white]: Notifications | [yellow]3[white]: Logs | [yellow]4[white]: Agents Q&A[grey]")
+	p.statusBar.SetText("[yellow]↑↓[white]: Navigate | [yellow]Enter[white]: View Details | [yellow]Tab[white]: Switch Focus | [yellow]Q[white]: Quit\n[grey]Pages: [yellow]1[white]: Processes | [yellow]2[white]: Notifications | [yellow]3[white]: Agents Q&A | [yellow]4[white]: Logs | [yellow]5[white]: Features[grey]")
 	p.statusBar.SetTextAlign(tview.AlignCenter)
 	p.statusBar.SetDynamicColors(true)
 }

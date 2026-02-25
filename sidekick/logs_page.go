@@ -113,7 +113,7 @@ func (p *LogsPageView) setupControls() {
 // setupStatusBar configures the status bar
 func (p *LogsPageView) setupStatusBar() {
 	p.statusBar.SetDynamicColors(true)
-	p.statusBar.SetText("[yellow]Enter[white]: View Details | [yellow]Tab[white]: Switch panels | [yellow]f[white]: Filter | [yellow]c[white]: Clear | [yellow]↑↓[white]: Navigate\n[grey]Pages: [yellow]1[white]: Processes | [yellow]2[white]: Notifications | [yellow]3[white]: Logs | [yellow]4[white]: Agents Q&A[grey]")
+	p.statusBar.SetText("[yellow]Enter[white]: View Details | [yellow]Tab[white]: Switch panels | [yellow]f[white]: Filter | [yellow]c[white]: Clear | [yellow]↑↓[white]: Navigate\n[grey]Pages: [yellow]1[white]: Processes | [yellow]2[white]: Notifications | [yellow]3[white]: Agents Q&A | [yellow]4[white]: Logs | [yellow]5[white]: Features[grey]")
 	p.statusBar.SetBorder(true).SetBorderPadding(0, 0, 1, 1)
 	p.statusBar.SetBackgroundColor(tcell.ColorBlack)
 }
@@ -288,7 +288,7 @@ func (p *LogsPageView) updateStatusBar() {
 			return
 		}
 	}
-	p.statusBar.SetText("[yellow]Tab[white]: Switch panels | [yellow]f[white]: Filter | [yellow]c[white]: Clear | [yellow]↑↓[white]: Navigate\n[grey]Pages: [yellow]1[white]: Processes | [yellow]2[white]: Notifications | [yellow]3[white]: Logs | [yellow]4[white]: Agents Q&A[grey]")
+	p.statusBar.SetText("[yellow]Tab[white]: Switch panels | [yellow]f[white]: Filter | [yellow]c[white]: Clear | [yellow]↑↓[white]: Navigate\n[grey]Pages: [yellow]1[white]: Processes | [yellow]2[white]: Notifications | [yellow]3[white]: Agents Q&A | [yellow]4[white]: Logs | [yellow]5[white]: Features[grey]")
 }
 
 // focusNext moves focus to the next control
