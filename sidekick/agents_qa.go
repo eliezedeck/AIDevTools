@@ -315,22 +315,21 @@ func (r *AgentQARegistry) WaitForQuestionWithContext(ctx context.Context, name, 
 		}
 
 		if existingWaiter.Name == name {
-			if existingContextCancelled {
-				// Same specialist re-entering but prior context was cancelled
-				// Clean up and re-register with new context
-				LogInfo("AgentQA", fmt.Sprintf("Specialist '%s' re-entering with cancelled context, re-registering for directory '%s'", name, dirKey))
-				r.recoverOrphanedQuestions(dirKey, existingWaiter.Name)
-				if existingWaiter.Cancel != nil {
-					existingWaiter.Cancel()
-				}
-				delete(r.activeWaiters, dirKey)
-				// Fall through to register new waiter
-			} else {
-				// Same specialist re-entering with valid context - normal flow after answering
-				existingWaiter.LastSeen = time.Now()
-				LogInfo("AgentQA", fmt.Sprintf("Specialist '%s' re-entering wait for directory '%s'", name, dirKey))
-				// Fall through to wait loop (will use existing waiter)
+			// Same specialist re-entering - ALWAYS update context to new HTTP request context
+			// The old context may be cancelled or about to be cancelled by the HTTP transport
+			LogInfo("AgentQA", fmt.Sprintf("Specialist '%s' re-entering wait for directory '%s', updating context", name, dirKey))
+			if existingWaiter.Cancel != nil {
+				existingWaiter.Cancel() // Cancel old context
 			}
+			// NOTE: Do NOT call recoverOrphanedQuestions here - same specialist may still
+			// be working on a question. Orphan recovery only happens when a DIFFERENT
+			// specialist takes over or during maintenance cleanup.
+			// Update with new context from current HTTP request
+			waiterCtx, waiterCancel := context.WithCancel(ctx)
+			existingWaiter.Context = waiterCtx
+			existingWaiter.Cancel = waiterCancel
+			existingWaiter.LastSeen = time.Now()
+			// Fall through to wait loop (will use updated waiter)
 		} else {
 			// Different specialist
 			if existingContextCancelled {
@@ -383,6 +382,11 @@ func (r *AgentQARegistry) WaitForQuestionWithContext(ctx context.Context, name, 
 		LogInfo("AgentQA", fmt.Sprintf("Registered specialist '%s' for directory '%s'", name, dirKey))
 	}
 
+	// IMPORTANT: Capture the context for THIS specific call
+	// When re-entering, waiter.Context may be updated by a newer call
+	// Each call must watch its own context to avoid goroutine leaks
+	myCtx := waiter.Context
+
 	// 5. Get per-directory condition variable
 	dirCond := r.getDirCond(dirKey)
 
@@ -393,12 +397,13 @@ func (r *AgentQARegistry) WaitForQuestionWithContext(ctx context.Context, name, 
 	}
 
 	// 6. Start context cancellation watcher (ONCE, not per loop)
+	// Watch THIS call's context (myCtx), not the shared waiter.Context
 	done := make(chan struct{})
 	defer close(done)
 
 	go func() {
 		select {
-		case <-waiter.Context.Done():
+		case <-myCtx.Done():
 			r.mutex.Lock()
 			dirCond.Broadcast() // Wake to check cancellation
 			r.mutex.Unlock()
@@ -425,8 +430,12 @@ func (r *AgentQARegistry) WaitForQuestionWithContext(ctx context.Context, name, 
 
 	// 8. Main wait loop
 	for {
-		// Update LastSeen on each wake to prevent maintenance cleanup
-		waiter.LastSeen = time.Now()
+		// Update LastSeen only if we're still the active waiter
+		// (a newer call may have replaced us with a new context)
+		currentWaiter := r.activeWaiters[dirKey]
+		if currentWaiter != nil && currentWaiter.Context == myCtx {
+			currentWaiter.LastSeen = time.Now()
+		}
 
 		// CRITICAL: Check if this specialist already has a question in Processing status
 		// Enforce one in-flight question per specialist rule
@@ -460,14 +469,22 @@ func (r *AgentQARegistry) WaitForQuestionWithContext(ctx context.Context, name, 
 			return foundQuestion, nil
 		}
 
-		// Check context cancellation
+		// Check context cancellation (check THIS call's context, not waiter.Context)
 		select {
-		case <-waiter.Context.Done():
-			// Context cancelled - clean up
-			delete(r.activeWaiters, dirKey)
+		case <-myCtx.Done():
+			// Context cancelled - only clean up if we're still the active waiter
+			// A newer call may have replaced us with a new context
+			currentWaiter := r.activeWaiters[dirKey]
+			if currentWaiter != nil && currentWaiter.Context == myCtx {
+				// We're still the active waiter - clean up
+				delete(r.activeWaiters, dirKey)
+				LogInfo("AgentQA", fmt.Sprintf("Specialist '%s' context cancelled in directory '%s'", name, dirKey))
+			} else {
+				// A newer call has taken over - just exit quietly
+				LogInfo("AgentQA", fmt.Sprintf("Specialist '%s' old context cancelled, newer call active in directory '%s'", name, dirKey))
+			}
 			r.mutex.Unlock()
-			LogInfo("AgentQA", fmt.Sprintf("Specialist '%s' context cancelled in directory '%s'", name, dirKey))
-			return nil, fmt.Errorf("context cancelled: %w", waiter.Context.Err())
+			return nil, fmt.Errorf("context cancelled: %w", myCtx.Err())
 		default:
 			// Context still valid
 		}

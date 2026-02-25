@@ -11,22 +11,32 @@ import (
 
 // handleAnswerQuestion provides an answer to a question. A question can only be answered once and only once.
 func handleAnswerQuestion(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	// Log full request for debugging
+	requestJSON, _ := json.Marshal(request.Params.Arguments)
+	LogInfo("AgentQA", "answer_question called", fmt.Sprintf("Request: %s", string(requestJSON)))
+
 	// Get required parameters
 	questionID, err := request.RequireString("question_id")
 	if err != nil {
+		LogError("AgentQA", "answer_question missing question_id", fmt.Sprintf("Request: %s", string(requestJSON)))
 		return mcp.NewToolResultError("Missing or invalid 'question_id' argument"), nil
 	}
 
 	answer, err := request.RequireString("answer")
 	if err != nil {
+		LogError("AgentQA", "answer_question missing answer", fmt.Sprintf("Request: %s", string(requestJSON)))
 		return mcp.NewToolResultError("Missing or invalid 'answer' argument"), nil
 	}
 
 	// Submit the answer
+	LogInfo("AgentQA", "Submitting answer", fmt.Sprintf("QuestionID: %s, AnswerLength: %d", questionID, len(answer)))
 	err = agentQARegistry.AnswerQuestion(questionID, answer, nil)
 	if err != nil {
+		LogError("AgentQA", "Failed to submit answer", fmt.Sprintf("QuestionID: %s, Error: %v", questionID, err))
 		return mcp.NewToolResultError(err.Error()), nil
 	}
+
+	LogInfo("AgentQA", "Answer submitted successfully", fmt.Sprintf("QuestionID: %s", questionID))
 
 	result := map[string]any{
 		"status":      "answer_submitted",
@@ -39,19 +49,26 @@ func handleAnswerQuestion(ctx context.Context, request mcp.CallToolRequest) (*mc
 
 // handleGetNextQuestion waits for and retrieves the next question for this specialist
 func handleGetNextQuestion(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	// Log full request for debugging
+	requestJSON, _ := json.Marshal(request.Params.Arguments)
+	LogInfo("AgentQA", "get_next_question called", fmt.Sprintf("Request: %s", string(requestJSON)))
+
 	// Get required parameters
 	name, err := request.RequireString("name")
 	if err != nil {
+		LogError("AgentQA", "get_next_question missing name", fmt.Sprintf("Request: %s", string(requestJSON)))
 		return mcp.NewToolResultError("Missing or invalid 'name' argument"), nil
 	}
 
 	specialty, err := request.RequireString("specialty")
 	if err != nil {
+		LogError("AgentQA", "get_next_question missing specialty", fmt.Sprintf("Request: %s", string(requestJSON)))
 		return mcp.NewToolResultError("Missing or invalid 'specialty' argument"), nil
 	}
 
 	rootDir, err := request.RequireString("root_dir")
 	if err != nil {
+		LogError("AgentQA", "get_next_question missing root_dir", fmt.Sprintf("Request: %s", string(requestJSON)))
 		return mcp.NewToolResultError("Missing or invalid 'root_dir' argument"), nil
 	}
 
@@ -112,13 +129,16 @@ func handleGetNextQuestion(ctx context.Context, request mcp.CallToolRequest) (*m
 
 	qa, err := agentQARegistry.WaitForQuestionWithContext(ctx, name, specialty, rootDir, instructions, timeout)
 	if err != nil {
-		LogError("AgentQA", "Error waiting for question", fmt.Sprintf("Specialty: %s, Error: %v", specialty, err))
-
 		// Check if error is due to context cancellation
 		if ctx.Err() != nil {
-			LogInfo("AgentQA", "Request cancelled by context", fmt.Sprintf("Context error: %v", ctx.Err()))
-			return mcp.NewToolResultError("Request cancelled"), nil
+			LogError("AgentQA", "Context cancelled while waiting",
+				fmt.Sprintf("Name: %s, Specialty: %s, RootDir: %s, ContextErr: %v, WaitErr: %v, Request: %s",
+					name, specialty, rootDir, ctx.Err(), err, string(requestJSON)))
+			return mcp.NewToolResultError(fmt.Sprintf("Request cancelled: %v", ctx.Err())), nil
 		}
+		LogError("AgentQA", "Error waiting for question",
+			fmt.Sprintf("Name: %s, Specialty: %s, RootDir: %s, Error: %v, Request: %s",
+				name, specialty, rootDir, err, string(requestJSON)))
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 
